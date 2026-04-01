@@ -1,0 +1,1047 @@
+{{define "title-dashboard"}}Dashboard - Fin{{end}}
+
+{{define "content-dashboard"}}
+<style>
+/* ============================================
+   DASHBOARD V3 - Financial Planner View
+   5-card bento layout with cash flow focus
+   ============================================ */
+
+:root {
+    --card-bg: var(--bg-secondary);
+    --card-radius: 16px;
+    --card-padding: 24px;
+    --card-gap: 16px;
+}
+
+/* Period controls */
+.period-controls-v3 {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 16px;
+    padding: 8px 0;
+}
+
+.month-nav-v3 {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.month-nav-btn-v3 {
+    background: none;
+    border: none;
+    padding: 6px 10px;
+    font-size: 1.125rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 6px;
+    line-height: 1;
+}
+
+.month-nav-btn-v3:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.month-label-v3 {
+    font-size: 0.875rem;
+    font-weight: 400;
+    color: var(--text-secondary);
+    min-width: 140px;
+    text-align: center;
+}
+
+.now-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    background: var(--accent-green);
+    border-radius: 50%;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+
+.closed-badge {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--accent-blue);
+    background: rgba(37, 99, 235, 0.1);
+    border: 1px solid rgba(37, 99, 235, 0.25);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+
+.controls-right-v3 {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+    align-items: center;
+    position: relative;
+}
+
+.search-input-v3 {
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 0.8125rem;
+    width: 100%;
+    outline: none;
+}
+
+.search-input-v3::placeholder { color: var(--text-muted); }
+
+.account-toggle-v3 {
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 0.8125rem;
+    cursor: pointer;
+    position: relative;
+}
+
+.account-toggle-v3:hover { border-color: var(--text-secondary); }
+
+.account-dropdown-v3 {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-md);
+    padding: 8px;
+    z-index: 50;
+    display: none;
+    min-width: 200px;
+}
+
+.account-dropdown-v3.open { display: block; }
+
+.account-dropdown-v3 label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.account-dropdown-v3 label:hover { background: var(--bg-hover); }
+.account-dropdown-v3 label.selected { color: var(--text-primary); font-weight: 500; }
+.account-dropdown-v3 input[type="checkbox"] { accent-color: var(--accent-blue); }
+
+/* Bento grid */
+.bento-grid-v3 {
+    display: grid;
+    gap: var(--card-gap);
+    grid-template-columns: 1fr;
+}
+
+@media (min-width: 768px) {
+    .bento-grid-v3 { grid-template-columns: 1fr 1fr; }
+    .card-hero-v3, .card-full-v3 { grid-column: 1 / -1; }
+    .card-tall-v3 { grid-row: span 2; }
+}
+
+/* Card base */
+.card-v3 {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--card-radius);
+    padding: var(--card-padding);
+    position: relative;
+    box-shadow: var(--shadow-sm);
+}
+
+.card-title-v3 {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+}
+
+.card-title-right-v3 {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+}
+
+/* Cash flow card */
+.cf-bars { margin: 8px 0 20px; }
+
+.cf-bar-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+    gap: 12px;
+}
+
+.cf-bar-label {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    width: 70px;
+    flex-shrink: 0;
+}
+
+.cf-bar-track {
+    flex: 1;
+    height: 28px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+    position: relative;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.cf-bar-track:hover { background: var(--bg-hover); }
+
+.cf-bar-fill { height: 100%; border-radius: 6px; transition: width 0.6s ease; }
+.cf-bar-fill.income { background: var(--accent-green, #4aba6f); }
+.cf-bar-fill.expenses { background: var(--accent-blue, #4a90d9); }
+
+.cf-bar-amount {
+    font-size: 0.875rem;
+    font-weight: 600;
+    width: 70px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.cf-gap {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin: 20px 0 8px;
+    padding-left: 82px;
+}
+
+.cf-savings {
+    font-size: 2.8rem;
+    font-weight: 700;
+    color: var(--accent-green, #4aba6f);
+    line-height: 1.2;
+}
+
+.cf-savings.negative { color: var(--accent-yellow, #d29922); }
+
+.cf-rate { font-size: 0.9375rem; color: var(--text-secondary); }
+
+.cf-comparison {
+    padding-left: 82px;
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}
+
+.cf-comparison span { color: var(--text-secondary); }
+
+.cf-top-driver {
+    padding-left: 82px;
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}
+
+.cf-driver-link {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-size: 0.8125rem;
+    color: var(--accent-blue, #2563eb);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.cf-income-flag {
+    padding-left: 82px;
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+    font-style: italic;
+    margin-bottom: 4px;
+}
+
+.cf-pacing {
+    padding-left: 82px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-style: italic;
+    margin-top: 8px;
+}
+
+.cf-pending { font-size: 0.75rem; color: var(--text-muted); margin-top: 12px; padding-left: 82px; }
+.cf-pending.warning {
+    color: var(--accent-yellow, #ffc933);
+    padding-left: 0;
+    background: rgba(255, 201, 51, 0.12);
+    border-radius: 8px;
+    padding: 8px 14px;
+    margin-top: 16px;
+}
+
+.info-tip {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--bg-hover);
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    text-align: center;
+    line-height: 14px;
+    cursor: help;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+/* Spending card */
+.spend-total { font-size: 1.1rem; font-weight: 700; color: var(--text-primary); }
+.spend-list { list-style: none; }
+.spend-item {
+    padding: 8px 0;
+    min-height: 44px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.spend-item:hover {
+    background: var(--bg-hover);
+    margin: 0 -8px;
+    padding: 8px;
+    border-radius: 6px;
+    border-color: transparent;
+}
+.spend-item:last-child { border-bottom: none; }
+.spend-row { display: flex; align-items: center; gap: 8px; }
+.spend-name { font-size: 0.875rem; color: var(--text-primary); width: 90px; flex-shrink: 0; }
+.spend-bar-track { flex: 1; height: 14px; background: var(--bg-tertiary); border-radius: 3px; overflow: hidden; }
+.spend-bar-fill { height: 100%; background: var(--accent-blue, #4a90d9); border-radius: 3px; opacity: 0.8; }
+.spend-amount { font-size: 0.875rem; font-weight: 600; width: 55px; text-align: right; flex-shrink: 0; }
+.spend-outlier {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--accent-yellow, #ffc933);
+    background: rgba(255, 201, 51, 0.12);
+    padding: 1px 6px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    min-width: 40px;
+    text-align: center;
+}
+.spend-outlier-spacer { min-width: 40px; flex-shrink: 0; }
+.spend-avg { font-size: 0.75rem; color: var(--text-muted); padding-left: 98px; margin-top: 4px; }
+.spend-footer {
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+}
+.spend-footer .above { color: var(--accent-yellow, #ffc933); }
+.spend-footer .below { color: var(--accent-green, #4aba6f); }
+
+/* Heads up card */
+.heads-up-empty { text-align: center; padding: 20px; color: var(--text-muted); font-size: 0.875rem; }
+.hu-item { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.hu-item:last-child { border-bottom: none; }
+.hu-item-title { font-size: 0.875rem; color: var(--text-primary); margin-bottom: 2px; }
+.hu-item-detail { font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 8px; }
+.hu-actions { display: flex; gap: 8px; }
+.hu-btn {
+    font-size: 0.8125rem;
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+    cursor: pointer;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+}
+.hu-btn:hover { color: var(--text-primary); border-color: var(--text-muted); }
+.hu-btn.primary {
+    background: rgba(74, 186, 111, 0.15);
+    border-color: var(--accent-green, #4aba6f);
+    color: var(--accent-green, #4aba6f);
+}
+
+/* Trend card */
+.trend-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    height: 160px;
+    padding: 0 4px;
+    margin-bottom: 12px;
+}
+.trend-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    justify-content: flex-end;
+    cursor: pointer;
+}
+.trend-val { font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; }
+.trend-bar {
+    width: 100%;
+    max-width: 56px;
+    border-radius: 4px 4px 0 0;
+    background: var(--accent-green, #4aba6f);
+    min-height: 4px;
+    transition: filter 0.15s;
+}
+.trend-bar.negative { background: var(--accent-red, #ea4335); }
+.trend-bar.in-progress { background: transparent; border: 2px dashed var(--accent-green, #4aba6f); }
+.trend-month { font-size: 0.75rem; color: var(--text-muted); margin-top: 6px; }
+.trend-month.current { color: var(--text-secondary); font-weight: 600; }
+.trend-col:hover .trend-bar { filter: brightness(1.3); }
+.trend-col:hover .trend-val { color: var(--text-primary); }
+.trend-label { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; font-style: italic; }
+.trend-footer {
+    text-align: center;
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+}
+
+/* Savings rate card */
+.sr-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+.sr-col { display: flex; flex-direction: column; gap: 2px; }
+.sr-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.sr-value { font-size: 1.375rem; font-weight: 600; color: var(--text-primary); }
+.sr-value.tier-wealth-building { color: #4ade80; }
+.sr-value.tier-progress        { color: #60a5fa; }
+.sr-value.tier-survival        { color: #facc15; }
+.sr-value.tier-negative        { color: #f87171; }
+.sr-bar-track { width: 100%; height: 4px; background: var(--border-color); border-radius: 2px; overflow: hidden; margin: 8px 0 4px; }
+.sr-bar-fill { height: 100%; border-radius: 2px; background: #60a5fa; }
+.sr-bar-fill.tier-wealth-building { background: #4ade80; }
+.sr-bar-fill.tier-survival        { background: #facc15; }
+.sr-bar-fill.tier-negative        { background: #f87171; }
+.sr-tier-label { font-size: 0.75rem; font-weight: 500; }
+.sr-tier-label.tier-wealth-building { color: #4ade80; }
+.sr-tier-label.tier-progress        { color: #60a5fa; }
+.sr-tier-label.tier-survival        { color: #facc15; }
+.sr-tier-label.tier-negative        { color: #f87171; }
+.sr-raw { font-size: 0.75rem; color: var(--text-muted); margin-top: 8px; }
+.card-help { font-size: 0.75rem; color: var(--text-muted); text-decoration: none; margin-left: 4px; }
+.card-help:hover { color: var(--text-secondary); }
+
+/* Search results */
+.search-results-v3 {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 4px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-md);
+    max-height: 400px;
+    overflow-y: auto;
+    z-index: 100;
+}
+.search-result-item-v3 {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    min-height: 44px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.8125rem;
+}
+.search-result-item-v3:last-child { border-bottom: none; }
+.search-result-item-v3:hover { background: var(--bg-hover); }
+.search-result-info-v3 { flex: 1; min-width: 0; }
+.search-result-merchant-v3 { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-result-meta-v3 { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; }
+.search-result-amount-v3 { font-weight: 600; white-space: nowrap; margin-left: 12px; }
+.search-result-amount-v3.positive { color: var(--accent-green); }
+.search-result-amount-v3.negative { color: var(--accent-red); }
+.search-empty-v3 { padding: 16px; text-align: center; color: var(--text-muted); font-size: 0.8125rem; }
+
+@media (max-width: 767px) {
+    :root { --card-padding: 18px; }
+    .period-controls-v3 { flex-direction: column; align-items: stretch; }
+    .controls-right-v3 { margin-left: 0; flex: 1 1 100%; }
+    .cf-savings { font-size: 2.2rem; }
+    .cf-gap, .cf-comparison, .cf-pacing, .cf-pending:not(.warning) { padding-left: 0; }
+    .cf-bar-label { width: 60px; font-size: 0.75rem; }
+    .spend-name { width: 72px; font-size: 0.8125rem; }
+    .spend-avg { padding-left: 80px; }
+    .trend-chart { height: 120px; }
+    .trend-val { display: none; }
+    .hu-actions { flex-direction: column; }
+    .hu-btn { justify-content: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}
+</style>
+
+{{if .ShowNoData}}
+<div class="no-data-state" style="padding: 48px 24px; text-align: center; color: var(--text-secondary);">
+    <p style="font-size: 1.1rem; margin-bottom: 8px;">No accounts selected</p>
+    <p style="font-size: 0.9rem;">Select one or more accounts using the filter above.</p>
+</div>
+{{else}}
+<div class="dashboard">
+    <!-- Period Controls -->
+    <div class="period-controls-v3">
+        <div class="month-nav-v3">
+            <button class="month-nav-btn-v3" onclick="navigateMonth(-1)" title="Previous month" aria-label="Previous month">&lsaquo;</button>
+            <span class="month-label-v3">
+                {{if .CurrentPeriod}}
+                    {{.CurrentPeriod.PeriodLabel}}
+                    {{if eq .PeriodType "this_month"}}<span class="now-dot" title="Current month"></span>{{end}}
+                    {{if .ClosedPeriod}}<span class="closed-badge" title="Period closed">Closed</span>{{end}}
+                {{else}}
+                    No data
+                {{end}}
+            </span>
+            <button class="month-nav-btn-v3" onclick="navigateMonth(1)" title="Next month" aria-label="Next month">&rsaquo;</button>
+        </div>
+
+        <div class="controls-right-v3">
+            {{if gt (len .AllAccounts) 1}}
+            <div style="position: relative;">
+                <button class="account-toggle-v3" onclick="toggleAccounts(event)" id="accountToggle">
+                    {{if and .SelectedAccounts (lt (len .SelectedAccounts) (len .AllAccounts))}}
+                        {{len .SelectedAccounts}} account{{if ne (len .SelectedAccounts) 1}}s{{end}}
+                    {{else}}
+                        All accounts
+                    {{end}} &#9662;
+                </button>
+                <div class="account-dropdown-v3" id="accountDropdown">
+                    {{range .AllAccounts}}
+                    <label class="{{if $.IsAccountSelected .AccountID}}selected{{end}}">
+                        <input type="checkbox" value="{{.AccountID}}"
+                               {{if $.IsAccountSelected .AccountID}}checked{{end}}
+                               onchange="updateAccountFilter()">
+                        {{if .Name}}{{.Name}}{{else}}{{slice .AccountID 0 12}}{{end}}
+                    </label>
+                    {{end}}
+                </div>
+            </div>
+            {{end}}
+            <div style="position: relative; flex: 1; min-width: 160px;">
+                <input type="search" id="txnSearchV3" class="search-input-v3" placeholder="Search transactions..." autocomplete="off">
+            </div>
+        </div>
+    </div>
+
+    {{if .CurrentPeriod}}
+    <!-- Bento Grid -->
+    <div class="bento-grid-v3">
+
+        <!-- CARD 1: CASH FLOW (Hero) -->
+        <div class="card-v3 card-hero-v3">
+            <div class="card-title-v3">
+                Cash Flow
+                <span class="card-title-right-v3">{{.CurrentPeriod.PeriodLabel}}</span>
+            </div>
+
+            {{$income := .CurrentPeriod.IncomeCents}}
+            {{$expenses := add .CurrentPeriod.RecurringCents .CurrentPeriod.DiscretionaryCents}}
+            {{$maxAmt := $income}}
+            {{if gt $expenses $income}}{{$maxAmt = $expenses}}{{end}}
+
+            <div class="cf-bars">
+                <div class="cf-bar-row">
+                    <span class="cf-bar-label">Income</span>
+                    <div class="cf-bar-track" onclick="finDrilldown.open('income')" role="button" tabindex="0" title="Click for details">
+                        <div class="cf-bar-fill income" style="width: 100%"></div>
+                    </div>
+                    <span class="cf-bar-amount">{{formatUSD $income}}</span>
+                </div>
+                <div class="cf-bar-row">
+                    <span class="cf-bar-label">Expenses</span>
+                    <div class="cf-bar-track" onclick="finDrilldown.open('spend')" role="button" tabindex="0" title="Click for details">
+                        {{if gt $maxAmt 0}}
+                        <div class="cf-bar-fill expenses" style="width: {{mul (div100 $expenses $maxAmt) 100}}%"></div>
+                        {{end}}
+                    </div>
+                    <span class="cf-bar-amount">{{formatUSD $expenses}}</span>
+                </div>
+            </div>
+
+            <div class="cf-gap">
+                {{if ge .CurrentPeriod.NetCents 0}}
+                    <span class="cf-savings">Kept {{formatUSD .CurrentPeriod.NetCents}}</span>
+                {{else}}
+                    <span class="cf-savings negative">Over {{formatUSD (neg .CurrentPeriod.NetCents)}}</span>
+                {{end}}
+                {{if .SavingsRatePct}}
+                    <span class="cf-rate">{{formatPercent .SavingsRatePct}}% of income</span>
+                {{end}}
+            </div>
+
+            {{if and (gt .CurrentPeriod.IncomeCents 0) (gt .CurrentPeriod.RecurringCents 0)}}
+            <div class="cf-comparison">
+                Baseline: <span>{{formatUSD (sub .CurrentPeriod.IncomeCents .CurrentPeriod.RecurringCents)}}/mo</span> &middot; income minus commitments
+            </div>
+            {{end}}
+
+            {{if .CurrentPeriod.IncomeCents}}
+            <div class="cf-income-flag" style="display:none" id="cfAvgComparison"></div>
+            {{end}}
+
+            <div class="cf-pacing" id="cfPacing" style="display:none;"></div>
+
+            {{if gt .PendingCount 0}}
+            <div class="cf-pending">
+                {{.PendingCount}} pending transaction{{if ne .PendingCount 1}}s{{end}} not included
+            </div>
+            {{end}}
+
+            <p class="sr-only">
+                Cash flow for {{.CurrentPeriod.PeriodLabel}}:
+                Income {{formatUSD .CurrentPeriod.IncomeCents}},
+                Expenses {{formatUSD $expenses}},
+                Net {{if ge .CurrentPeriod.NetCents 0}}kept{{else}}over{{end}} {{formatUSD (absInt .CurrentPeriod.NetCents)}}.
+            </p>
+        </div>
+
+        <!-- CARD 3: SPENDING BREAKDOWN -->
+        {{if .CategoryBreakdown}}
+        <div class="card-v3 card-tall-v3">
+            <div class="card-title-v3">
+                Spending
+                <span class="spend-total">{{formatUSD (add .CurrentPeriod.DiscretionaryCents .CurrentPeriod.RecurringCents)}}</span>
+            </div>
+
+            {{$topCats := slice .CategoryBreakdown 0 7}}
+            {{$maxCat := 0}}
+            {{range $topCats}}{{if gt .NetCents $maxCat}}{{$maxCat = .NetCents}}{{end}}{{end}}
+            <ul class="spend-list">
+                {{range $topCats}}
+                {{$barWidth := 0}}
+                {{if gt $maxCat 0}}{{$barWidth = mul (div100 .NetCents $maxCat) 100}}{{end}}
+                <li class="spend-item"
+                    onclick="finDrilldown.open('category:{{.CategoryID}}')"
+                    role="button" tabindex="0" title="Click for details">
+                    <div class="spend-row">
+                        <span class="spend-name">{{.CategoryName}}</span>
+                        <div class="spend-bar-track">
+                            <div class="spend-bar-fill" style="width: {{$barWidth}}%"></div>
+                        </div>
+                        <span class="spend-amount">{{formatUSD .NetCents}}</span>
+                        {{if gt .OutlierPct 10}}
+                            <span class="spend-outlier">+{{.OutlierPct}}%</span>
+                        {{else}}
+                            <span class="spend-outlier-spacer"></span>
+                        {{end}}
+                    </div>
+                    {{if gt .AvgCents 0}}
+                        <div class="spend-avg">avg {{formatUSD .AvgCents}}</div>
+                    {{end}}
+                </li>
+                {{end}}
+            </ul>
+
+            {{if .SpendFooterDiff}}
+            <div class="spend-footer">
+                Total is
+                {{if gt .SpendFooterDiff 0}}
+                    <span class="above">{{formatUSD .SpendFooterDiff}} more</span>
+                {{else if lt .SpendFooterDiff 0}}
+                    <span class="below">{{formatUSD (neg .SpendFooterDiff)}} less</span>
+                {{else}}
+                    <span>on track with</span>
+                {{end}}
+                than your 3-month average
+            </div>
+            {{end}}
+        </div>
+        {{end}}
+
+        <!-- CARD: SAVINGS RATE -->
+        {{if gt .CurrentPeriod.IncomeCents 0}}
+        <div class="card-v3 card-half-v3">
+            <div class="card-title-v3">
+                Savings Rate
+                <a href="#" class="card-help" title="(Income - Expenses) / Income. Benchmarks: 10% survival · 20% progress · 30%+ wealth-building">[?]</a>
+            </div>
+
+            <div class="sr-grid">
+                <div class="sr-col">
+                    <span class="sr-label">This month</span>
+                    <span class="sr-value tier-{{.SavingsTier}}">{{formatPercent .SavingsRatePct}}%</span>
+                </div>
+                <div class="sr-col">
+                    <span class="sr-label">3-mo avg</span>
+                    <span class="sr-value">{{formatPercent .AvgSavingsRatePct}}%</span>
+                </div>
+                <div class="sr-col">
+                    <span class="sr-label">Target</span>
+                    <span class="sr-value" style="color: var(--text-muted);">20%+</span>
+                </div>
+            </div>
+
+            {{$barPct := clamp .SavingsRatePct 0.0 100.0}}
+            <div class="sr-bar-track">
+                <div class="sr-bar-fill tier-{{.SavingsTier}}" style="width: {{formatPercent $barPct}}%"></div>
+            </div>
+            <span class="sr-tier-label tier-{{.SavingsTier}}">
+                {{if eq .SavingsTier "wealth-building"}}Wealth-building
+                {{else if eq .SavingsTier "progress"}}On track
+                {{else if eq .SavingsTier "survival"}}Below target
+                {{else}}Spending more than earning
+                {{end}}
+            </span>
+
+            <div class="sr-raw">
+                {{formatUSD .CurrentPeriod.NetCents}} kept of {{formatUSD .CurrentPeriod.IncomeCents}} income
+            </div>
+        </div>
+        {{end}}
+
+        <!-- CARD 4: HEADS UP -->
+        {{if .AttentionItems}}
+        <div class="card-v3 card-full-v3">
+            <div class="card-title-v3">Heads Up</div>
+            <div id="headsUpContent">
+                {{range $i, $item := .AttentionItems}}
+                <div class="hu-item" id="huItem{{add $i 1}}"
+                    {{if .DrilldownScope}}onclick="finDrilldown.open('{{.DrilldownScope}}')" role="button" tabindex="0" style="cursor:pointer"{{end}}>
+                    <div class="hu-item-title">{{.Title}}</div>
+                    {{if .Detail}}
+                    <div class="hu-item-detail">{{.Detail}}</div>
+                    {{end}}
+                    {{if and (eq .ActionType "alert") (not .Actioned)}}
+                    <div class="hu-actions">
+                        <button class="hu-btn primary" onclick="event.stopPropagation(); dismissAlert('{{.Key}}', 'not_suspicious', {{add $i 1}})">Looks fine</button>
+                        <button class="hu-btn" onclick="event.stopPropagation(); dismissAlert('{{.Key}}', 'confirmed', {{add $i 1}})">Flag it</button>
+                    </div>
+                    {{else if eq .Type "duplicate_sub"}}
+                    <div class="hu-actions">
+                        <a href="/commitments" class="hu-btn primary" style="text-decoration:none;" onclick="event.stopPropagation()">Review &amp; Dismiss</a>
+                    </div>
+                    {{end}}
+                </div>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+
+        <!-- CARD 5: YOUR TREND -->
+        {{if gt (len .Periods) 1}}
+        <div class="card-v3 card-full-v3">
+            <div class="card-title-v3">Your Trend</div>
+
+            <div class="trend-chart">
+                {{$periods := .Periods}}
+                {{$maxKept := 0}}
+                {{range $periods}}{{$a := absInt .NetCents}}{{if gt $a $maxKept}}{{$maxKept = $a}}{{end}}{{end}}
+                {{range $i, $p := $periods}}
+                {{$isCurrent := eq $i 0}}
+                {{$barH := 10}}
+                {{if gt $maxKept 0}}{{$barH = mul (div100 (absInt $p.NetCents) $maxKept) 100}}{{end}}
+                <div class="trend-col"
+                    onclick="navigateToMonth('{{$p.StartDate}}')"
+                    role="button" tabindex="0"
+                    title="Click to view {{$p.PeriodLabel}}">
+                    <span class="trend-val">{{if ge $p.NetCents 0}}+{{else}}-{{end}}{{formatUSD (absInt $p.NetCents)}}</span>
+                    <div class="trend-bar{{if lt $p.NetCents 0}} negative{{end}}{{if and $isCurrent (eq $.PeriodType "this_month")}} in-progress{{end}}" style="height: {{$barH}}%"></div>
+                    <span class="trend-month{{if $isCurrent}} current{{end}}">{{shortMonth $p.PeriodLabel}}</span>
+                    {{if and $isCurrent (eq $.PeriodType "this_month")}}
+                    <span class="trend-label">In progress</span>
+                    {{end}}
+                </div>
+                {{end}}
+            </div>
+
+            {{$avgNet := avgNetCents .Periods}}
+            <div class="trend-footer">
+                Average: <strong>{{if ge $avgNet 0}}+{{else}}-{{end}}{{formatUSD (absInt $avgNet)}}/mo</strong> kept over {{len .Periods}} months
+            </div>
+        </div>
+        {{end}}
+
+    </div>
+
+    {{else}}
+    <!-- No data state -->
+    <div class="card-v3">
+        <div style="text-align: center; padding: 64px 16px; color: var(--text-muted);">
+            <div style="font-size: 3rem; margin-bottom: 12px; opacity: 0.5;">&#128202;</div>
+            <p style="font-size: 1rem; margin-bottom: 8px;">No data for this period</p>
+            <p>Try syncing your transactions or selecting a different date range.</p>
+        </div>
+    </div>
+    {{end}}
+</div>
+{{end}}
+
+<script>
+// Month navigation
+function navigateMonth(delta) {
+    var params = new URLSearchParams(window.location.search);
+    var currentPeriod = params.get('period') || 'this_month';
+    var targetDate;
+    var startStr = params.get('start_date');
+
+    if (startStr) {
+        targetDate = new Date(startStr + 'T00:00:00');
+    } else if (currentPeriod === 'last_month') {
+        var now = new Date();
+        targetDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    } else {
+        targetDate = new Date();
+        targetDate.setDate(1);
+    }
+
+    targetDate.setMonth(targetDate.getMonth() + delta);
+
+    var now = new Date();
+    var isThisMonth = targetDate.getFullYear() === now.getFullYear() && targetDate.getMonth() === now.getMonth();
+    var lm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    var isLastMonth = targetDate.getFullYear() === lm.getFullYear() && targetDate.getMonth() === lm.getMonth();
+
+    var url = new URL(window.location.href);
+    if (isThisMonth) {
+        url.searchParams.set('period', 'this_month');
+        url.searchParams.delete('start_date');
+        url.searchParams.delete('end_date');
+    } else if (isLastMonth) {
+        url.searchParams.set('period', 'last_month');
+        url.searchParams.delete('start_date');
+        url.searchParams.delete('end_date');
+    } else {
+        var start = targetDate.toISOString().split('T')[0];
+        var endDate = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0);
+        var end = endDate.toISOString().split('T')[0];
+        url.searchParams.set('start_date', start);
+        url.searchParams.set('end_date', end);
+        url.searchParams.set('period', 'this_month');
+    }
+    window.location = url;
+}
+
+function navigateToMonth(startDate) {
+    var targetDate = new Date(startDate + 'T00:00:00');
+    var now = new Date();
+    var isThisMonth = targetDate.getFullYear() === now.getFullYear() && targetDate.getMonth() === now.getMonth();
+    var url = new URL(window.location.href);
+    if (isThisMonth) {
+        url.searchParams.set('period', 'this_month');
+        url.searchParams.delete('start_date');
+        url.searchParams.delete('end_date');
+    } else {
+        var start = targetDate.toISOString().split('T')[0];
+        var endDate = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0);
+        var end = endDate.toISOString().split('T')[0];
+        url.searchParams.set('start_date', start);
+        url.searchParams.set('end_date', end);
+        url.searchParams.set('period', 'this_month');
+    }
+    window.location = url;
+}
+
+// Account filter
+function toggleAccounts(e) {
+    e.stopPropagation();
+    var dropdown = document.getElementById('accountDropdown');
+    if (!dropdown) return;
+    dropdown.classList.toggle('open');
+}
+
+function updateAccountFilter() {
+    var checkboxes = document.querySelectorAll('#accountDropdown input[type="checkbox"]');
+    var selected = Array.from(checkboxes).filter(function(cb) { return cb.checked; }).map(function(cb) { return cb.value; });
+    var url = new URL(window.location.href);
+    if (selected.length === 0 || selected.length === checkboxes.length) {
+        url.searchParams.delete('accounts');
+    } else {
+        url.searchParams.set('accounts', selected.join(','));
+    }
+    window.location = url;
+}
+
+document.addEventListener('click', function(e) {
+    var dropdown = document.getElementById('accountDropdown');
+    if (dropdown && !e.target.closest('.account-toggle-v3') && !e.target.closest('.account-dropdown-v3')) {
+        dropdown.classList.remove('open');
+    }
+});
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        var dropdown = document.getElementById('accountDropdown');
+        if (dropdown) dropdown.classList.remove('open');
+    }
+});
+
+// Alert dismissal
+async function dismissAlert(key, action, index) {
+    try {
+        var response = await finApi.postJSON('/api/alert-action', { alert_key: key, action: action });
+        if (response.ok) {
+            var el = document.getElementById('huItem' + index);
+            if (el) {
+                el.style.transition = 'opacity 300ms ease, transform 300ms ease';
+                el.style.opacity = '0';
+                el.style.transform = 'translateX(20px)';
+                setTimeout(function() { el.remove(); }, 300);
+            }
+        } else {
+            var el2 = document.getElementById('huItem' + index);
+            if (el2) {
+                el2.style.outline = '2px solid var(--accent-red)';
+                setTimeout(function() { el2.style.outline = ''; }, 2000);
+            }
+        }
+    } catch (e) {
+        console.error('Failed to dismiss alert:', e);
+    }
+}
+
+// Transaction search
+(function() {
+    var input = document.getElementById('txnSearchV3');
+    if (!input) return;
+    var debounceTimer = null;
+
+    input.addEventListener('input', function() {
+        clearTimeout(debounceTimer);
+        var q = this.value.trim();
+        if (q.length < 2) { hideSearchResults(); return; }
+        debounceTimer = setTimeout(function() { doSearch(q); }, 300);
+    });
+
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') { hideSearchResults(); this.blur(); }
+    });
+
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.controls-right-v3')) hideSearchResults();
+    });
+
+    async function doSearch(q) {
+        var params = new URLSearchParams(window.location.search);
+        var accounts = params.get('accounts');
+        var url = '/api/search?q=' + encodeURIComponent(q) + '&days=365';
+        if (accounts) url += '&accounts=' + encodeURIComponent(accounts);
+        try {
+            var resp = await fetch(url);
+            var data = await resp.json();
+            renderSearchResults(data);
+        } catch (e) { console.error('Search failed:', e); }
+    }
+
+    function renderSearchResults(data) {
+        var resultsEl = document.getElementById('searchResultsV3');
+        if (!resultsEl) {
+            resultsEl = document.createElement('div');
+            resultsEl.id = 'searchResultsV3';
+            resultsEl.className = 'search-results-v3';
+            input.parentElement.appendChild(resultsEl);
+        }
+        if (!data.matches || data.matches.length === 0) {
+            resultsEl.innerHTML = '<div class="search-empty-v3">No results found</div>';
+            resultsEl.style.display = 'block';
+            return;
+        }
+        resultsEl.innerHTML = '';
+        var fragment = document.createDocumentFragment();
+        for (var i = 0; i < Math.min(data.matches.length, 20); i++) {
+            var txn = data.matches[i];
+            var amt = Math.abs(txn.amount_cents / 100).toFixed(2);
+            var sign = txn.amount_cents >= 0 ? '+' : '-';
+            var amountClass = txn.amount_cents >= 0 ? 'positive' : 'negative';
+            var merchantRaw = txn.merchant || txn.description || 'Unknown';
+            var resultItem = document.createElement('div');
+            resultItem.className = 'search-result-item-v3';
+            resultItem.setAttribute('tabindex', '0');
+            resultItem.setAttribute('role', 'button');
+            var capturedMerchant = merchantRaw.toLowerCase();
+            resultItem.addEventListener('click', (function(m) {
+                return function() { finDrilldown.open('merchant:' + encodeURIComponent(m)); };
+            })(capturedMerchant));
+            var infoDiv = document.createElement('div');
+            infoDiv.className = 'search-result-info-v3';
+            var merchantDiv = document.createElement('div');
+            merchantDiv.className = 'search-result-merchant-v3';
+            merchantDiv.textContent = merchantRaw;
+            var metaDiv = document.createElement('div');
+            metaDiv.className = 'search-result-meta-v3';
+            metaDiv.textContent = txn.date + ' \u2022 ' + (txn.account_name || '');
+            infoDiv.appendChild(merchantDiv);
+            infoDiv.appendChild(metaDiv);
+            var amountDiv = document.createElement('div');
+            amountDiv.className = 'search-result-amount-v3 ' + amountClass;
+            amountDiv.textContent = sign + '$' + amt;
+            resultItem.appendChild(infoDiv);
+            resultItem.appendChild(amountDiv);
+            fragment.appendChild(resultItem);
+        }
+        resultsEl.appendChild(fragment);
+        resultsEl.style.display = 'block';
+    }
+
+    function hideSearchResults() {
+        var resultsEl = document.getElementById('searchResultsV3');
+        if (resultsEl) resultsEl.style.display = 'none';
+    }
+})();
+
+// Mid-month pacing (client-side)
+(function() {
+    {{if and .CurrentPeriod (eq .PeriodType "this_month")}}
+    var startDate = new Date('{{.CurrentPeriod.StartDate}}');
+    var today = new Date();
+    var daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    var daysElapsed = Math.floor((today - startDate) / (1000 * 60 * 60 * 24));
+
+    if (daysElapsed > 0 && daysElapsed < daysInMonth) {
+        var income = {{.CurrentPeriod.IncomeCents}};
+        var expenses = {{add .CurrentPeriod.RecurringCents .CurrentPeriod.DiscretionaryCents}};
+        var projectedIncome = Math.round(income / daysElapsed * daysInMonth);
+        var projectedExpenses = Math.round(expenses / daysElapsed * daysInMonth);
+        var projectedKept = projectedIncome - projectedExpenses;
+
+        var pacingEl = document.getElementById('cfPacing');
+        if (pacingEl && projectedKept !== 0) {
+            var projectedDollars = Math.round(Math.abs(projectedKept) / 100);
+            if (projectedKept >= 0) {
+                pacingEl.textContent = daysElapsed + ' days in \u2014 on pace to keep ~$' + projectedDollars + ' this month';
+            } else {
+                pacingEl.textContent = daysElapsed + ' days in \u2014 on pace to end ~$' + projectedDollars + ' over this month';
+                pacingEl.style.color = 'var(--accent-yellow, #d29922)';
+            }
+            pacingEl.style.display = 'block';
+        }
+    }
+    {{end}}
+})();
+</script>
+{{end}}

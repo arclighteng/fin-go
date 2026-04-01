@@ -1,0 +1,429 @@
+{{define "title-review"}}Review - Fin{{end}}
+
+{{define "content-review"}}
+<style>
+.review-count-banner {
+    background: var(--accent-red-dim, #fed7d7);
+    color: var(--accent-red);
+    border-radius: 10px;
+    padding: 14px 20px;
+    margin-bottom: 20px;
+    font-size: 0.9375rem;
+    font-weight: 500;
+}
+
+.review-count-banner.review-count-clear {
+    background: var(--accent-green-dim, #c6f6d5);
+    color: var(--accent-green);
+}
+
+.review-count-num {
+    font-size: 1.375rem;
+    font-weight: 700;
+    margin-right: 6px;
+}
+
+.audit-stats {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+}
+
+.audit-stat {
+    flex: 1;
+    min-width: 120px;
+    background: var(--bg-secondary);
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+}
+
+.audit-stat-value {
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1.1;
+}
+
+.audit-stat-label {
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.stat-good { color: var(--accent-green); }
+.stat-warn { color: var(--accent-yellow); }
+.stat-bad  { color: var(--accent-red); }
+
+.table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.audit-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+
+.audit-table th {
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 2px solid var(--border);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+.audit-table th.num,
+.audit-table td.num {
+    text-align: right;
+}
+
+.audit-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+}
+
+.audit-table tbody tr:hover {
+    background: var(--bg-hover);
+}
+
+.status-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.status-tracked  { background: var(--accent-green-dim, #c6f6d5); color: var(--accent-green); }
+.status-recurring { background: rgba(37, 99, 235, 0.1); color: var(--accent-blue); }
+.status-untracked { background: rgba(0, 0, 0, 0.05); color: var(--text-muted); }
+
+.conf-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.conf-low { background: var(--accent-red-dim, #fed7d7); color: var(--accent-red); }
+.conf-med { background: rgba(183, 121, 31, 0.1); color: var(--accent-yellow); }
+
+.cat-select {
+    font-size: 0.8125rem;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    cursor: pointer;
+    max-width: 160px;
+}
+
+.reason-cell {
+    font-family: monospace;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.desc-cell {
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.card {
+    background: var(--bg-secondary);
+    border-radius: 12px;
+    margin-bottom: 16px;
+    overflow: hidden;
+}
+
+.card-header {
+    padding: 16px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.card-header h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0;
+}
+
+.card-body {
+    padding: 0 20px 20px;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 24px;
+    color: var(--text-muted);
+}
+
+.account-filter { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.filter-label { font-size: 0.8125rem; color: var(--text-secondary); font-weight: 500; }
+.account-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.account-chip { display: flex; align-items: center; gap: 4px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 20px; font-size: 0.8125rem; cursor: pointer; color: var(--text-secondary); }
+.account-chip.selected { border-color: var(--accent-blue); color: var(--text-primary); background: rgba(37, 99, 235, 0.08); }
+.account-chip input { display: none; }
+.chip-text { white-space: nowrap; }
+
+.btn { display: inline-block; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.8125rem; text-decoration: none; color: var(--text-secondary); }
+.btn:hover { color: var(--text-primary); }
+
+@media (max-width: 640px) {
+    .audit-stats { gap: 8px; }
+    .audit-stat { min-width: 80px; padding: 12px; }
+    .audit-stat-value { font-size: 1.5rem; }
+    .audit-table { font-size: 0.8125rem; }
+    .audit-table th, .audit-table td { padding: 6px 8px; }
+}
+</style>
+
+<h1>Review</h1>
+
+<p style="color: var(--text-muted); margin-bottom: 12px;">
+    <a href="/dashboard" style="color: var(--accent-blue);">&#8592; Back to Dashboard</a>
+    &nbsp;|&nbsp; Categorization triage for current month
+</p>
+
+{{if .AllAccounts}}
+<div class="account-filter" style="margin-bottom: 24px;">
+    <label class="filter-label">Accounts:</label>
+    <div class="account-chips">
+        {{range .AllAccounts}}
+        {{$selected := $.IsAccountSelected .AccountID}}
+        <label class="account-chip{{if $selected}} selected{{end}}">
+            <input type="checkbox"
+                   value="{{.AccountID}}"
+                   {{if $selected}}checked{{end}}
+                   onchange="updateAccountFilter()">
+            <span class="chip-text">{{if .Name}}{{.Name}}{{else}}{{.AccountID}}{{end}}</span>
+        </label>
+        {{end}}
+    </div>
+    {{if or .SelectedAccounts .ShowNoData}}
+    <a href="/review" class="btn" style="margin-left: 8px;">All Accounts</a>
+    {{end}}
+</div>
+{{end}}
+
+{{if .ShowNoData}}
+<div class="card">
+    <div class="card-body">
+        <div class="empty-state"><p>Select accounts to view review data.</p></div>
+    </div>
+</div>
+{{else}}
+
+{{if gt .NeedsReviewCount 0}}
+<div class="review-count-banner">
+    <span class="review-count-num">{{.NeedsReviewCount}}</span>
+    transaction{{if ne .NeedsReviewCount 1}}s{{end}} need{{if eq .NeedsReviewCount 1}}s{{end}} review
+</div>
+{{else}}
+<div class="review-count-banner review-count-clear">
+    All caught up &mdash; no transactions need review
+</div>
+{{end}}
+
+{{if .Ghosts}}
+<div class="card">
+    <div class="card-header">
+        <h2>Uncategorized Expenses ({{len .Ghosts}})</h2>
+    </div>
+    <div class="card-body">
+    <div class="table-wrap">
+        <table class="audit-table">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Merchant</th>
+                    <th class="num">Amount</th>
+                    <th>Description</th>
+                    <th>Category</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range $i, $txn := .Ghosts}}
+                <tr id="ghost-{{add $i 1}}">
+                    <td>{{$txn.Date}}</td>
+                    <td>{{$txn.MerchantNorm}}</td>
+                    <td class="num">{{formatUSD (absInt $txn.AmountCents)}}</td>
+                    <td class="desc-cell">{{truncate $txn.RawDescription 60}}</td>
+                    <td>
+                        <select class="cat-select" onchange="setCategory('{{$txn.MerchantNorm}}', this.value, this)">
+                            <option value="">--</option>
+                            {{range $.AllCategories}}
+                            {{if and (ne .ID "other") (ne .ID "income") (ne .ID "one_time_deposit") (ne .ID "transfer")}}
+                            <option value="{{.ID}}">{{.Name}}</option>
+                            {{end}}
+                            {{end}}
+                        </select>
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    </div>
+</div>
+{{end}}
+
+{{if .LowConfidence}}
+<div class="card">
+    <div class="card-header">
+        <h2>Low Confidence ({{len .LowConfidence}})</h2>
+    </div>
+    <div class="card-body">
+    <div class="table-wrap">
+        <table class="audit-table">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Merchant</th>
+                    <th class="num">Amount</th>
+                    <th>Category</th>
+                    <th>Confidence</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .LowConfidence}}
+                <tr style="cursor: pointer;" onclick="finDrilldown.open('merchant:{{.MerchantNorm}}')" tabindex="0" role="row"
+                    onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();finDrilldown.open('merchant:{{.MerchantNorm}}')}">
+                    <td>{{.Date}}</td>
+                    <td>{{.MerchantNorm}}</td>
+                    <td class="num">{{formatUSD (absInt .AmountCents)}}</td>
+                    <td>{{.CategoryName}}</td>
+                    <td>
+                        <span class="conf-badge {{if lt .Confidence 50.0}}conf-low{{else}}conf-med{{end}}">
+                            {{formatPercent .Confidence}}%
+                        </span>
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    </div>
+</div>
+{{end}}
+
+{{if and (eq (len .Ghosts) 0) (eq (len .LowConfidence) 0)}}
+<div class="card">
+    <div class="card-body">
+        <div class="empty-state"><p>No transactions need review this month.</p></div>
+    </div>
+</div>
+{{end}}
+
+<div class="card">
+    <div class="card-header">
+        <h2>Top Merchants by Spend ({{len .TopMerchants}})</h2>
+    </div>
+    <div class="card-body">
+    {{if .TopMerchants}}
+    <div class="table-wrap">
+        <table class="audit-table">
+            <thead>
+                <tr>
+                    <th>Merchant</th>
+                    <th class="num">Charges</th>
+                    <th class="num">Total</th>
+                    <th>Last Seen</th>
+                    <th>Type</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .TopMerchants}}
+                <tr style="cursor: pointer;" onclick="finDrilldown.open('merchant:{{.Merchant}}')" tabindex="0" role="row"
+                    onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();finDrilldown.open('merchant:{{.Merchant}}')}">
+                    <td>{{.Merchant}}</td>
+                    <td class="num">{{.Count}}</td>
+                    <td class="num">{{formatUSD .TotalCents}}</td>
+                    <td>{{.LastSeen}}</td>
+                    <td>
+                        {{if eq .Status "tracked"}}
+                        <span class="status-badge status-tracked">Subscription / Bill</span>
+                        {{else if eq .Status "recurring"}}
+                        <span class="status-badge status-recurring">Recurring</span>
+                        {{else}}
+                        <span class="status-badge status-untracked">One-time</span>
+                        {{end}}
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{else}}
+    <div class="empty-state"><p>No merchant data available.</p></div>
+    {{end}}
+    </div>
+</div>
+
+<div class="audit-stats">
+    <div class="audit-stat">
+        <div class="audit-stat-value">{{.Coverage.TotalTxns}}</div>
+        <div class="audit-stat-label">Transactions</div>
+    </div>
+    <div class="audit-stat">
+        <div class="audit-stat-value {{if ge .Coverage.CatPct 90}}stat-good{{else if ge .Coverage.CatPct 70}}stat-warn{{else}}stat-bad{{end}}">{{.Coverage.CatPct}}%</div>
+        <div class="audit-stat-label">Categorized</div>
+    </div>
+    <div class="audit-stat">
+        <div class="audit-stat-value">{{.Coverage.TrackedMerchants}}</div>
+        <div class="audit-stat-label">Tracked Merchants</div>
+    </div>
+    <div class="audit-stat">
+        <div class="audit-stat-value {{if eq .Coverage.LowConf 0}}stat-good{{else}}stat-warn{{end}}">{{.Coverage.LowConf}}</div>
+        <div class="audit-stat-label">Low Confidence</div>
+    </div>
+</div>
+
+{{end}}
+
+<script>
+function updateAccountFilter() {
+    const checked = [...document.querySelectorAll('.account-chip input:checked')].map(el => el.value);
+    const params = new URLSearchParams(window.location.search);
+    const total = document.querySelectorAll('.account-chip input').length;
+    if (checked.length === 0) {
+        params.set('accounts', 'none');
+    } else if (checked.length === total) {
+        params.delete('accounts');
+    } else {
+        params.set('accounts', checked.join(','));
+    }
+    window.location.search = params.toString();
+}
+
+async function setCategory(merchant, categoryId, selectEl) {
+    if (!categoryId) return;
+    const row = selectEl.closest('tr');
+    try {
+        const resp = await finApi.postJSON('/api/category-override', {merchant: merchant, category_id: categoryId});
+        if (!resp.ok) throw new Error(await resp.text());
+        selectEl.disabled = true;
+        row.style.opacity = '0.5';
+        const label = selectEl.options[selectEl.selectedIndex].text;
+        selectEl.parentElement.innerHTML = '<span class="status-badge status-tracked">' + label + '</span>';
+    } catch (e) {
+        alert('Failed: ' + e.message);
+        selectEl.value = '';
+    }
+}
+</script>
+{{end}}

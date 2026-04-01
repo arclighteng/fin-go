@@ -1,0 +1,523 @@
+{{define "title-budget"}}Budget - Fin{{end}}
+
+{{define "content-budget"}}
+<style>
+.budget-page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 16px;
+}
+
+.budget-summary {
+    background: var(--bg-secondary);
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 20px;
+}
+
+.budget-summary-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.budget-summary-title {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.budget-summary-stats {
+    display: flex;
+    gap: 32px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+
+.budget-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.budget-stat-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.budget-stat-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.budget-stat-value.positive { color: var(--accent-green); }
+.budget-stat-value.negative { color: var(--accent-red); }
+
+.budget-progress-bar {
+    width: 100%;
+    height: 12px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.budget-progress-fill {
+    height: 100%;
+    border-radius: 6px;
+    transition: width 0.3s ease;
+}
+
+.budget-progress-fill.green { background: var(--accent-green); }
+.budget-progress-fill.yellow { background: var(--accent-yellow); }
+.budget-progress-fill.red { background: var(--accent-red); }
+
+.budget-categories {
+    background: var(--bg-secondary);
+    border-radius: 16px;
+    padding: 24px;
+}
+
+.budget-categories-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.budget-categories-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.budget-row {
+    display: grid;
+    grid-template-columns: 200px 1fr 120px 80px;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.budget-row:last-child {
+    border-bottom: none;
+}
+
+.budget-row-category {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.budget-row-category .icon {
+    font-size: 1.1rem;
+}
+
+.budget-row-bar {
+    position: relative;
+}
+
+.budget-row-bar .budget-progress-bar {
+    height: 8px;
+}
+
+.budget-row-amounts {
+    text-align: right;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.budget-row-amounts.drillable {
+    cursor: pointer;
+    border-radius: 4px;
+    padding: 2px 4px;
+    margin: -2px -4px;
+    transition: background 0.15s;
+}
+
+.budget-row-amounts.drillable:hover {
+    background: var(--bg-hover);
+    color: var(--accent-blue);
+}
+
+.budget-row-amounts .spent {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.budget-row-pct {
+    text-align: right;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.budget-row-pct.green { color: var(--accent-green); }
+.budget-row-pct.yellow { color: var(--accent-yellow); }
+.budget-row-pct.red { color: var(--accent-red); }
+
+.budget-target-input {
+    width: 100px;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    text-align: right;
+}
+
+.budget-target-input:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+}
+
+.budget-row-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.btn-icon {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.btn-icon:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.btn-icon.delete:hover {
+    color: var(--accent-red);
+}
+
+.add-target-form {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    flex-wrap: wrap;
+}
+
+.add-target-form select,
+.add-target-form input {
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+}
+
+.add-target-form select {
+    min-width: 180px;
+}
+
+.btn-add {
+    padding: 8px 16px;
+    background: var(--accent-blue);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.btn-add:hover {
+    opacity: 0.9;
+}
+
+.unbudgeted-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 16px 0 8px;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.unbudgeted-divider::after {
+    content: '';
+    flex: 1;
+    border-bottom: 1px dashed var(--border);
+}
+
+.budget-empty {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--text-muted);
+}
+
+.budget-empty h3 {
+    font-size: 1.1rem;
+    margin-bottom: 8px;
+    color: var(--text-secondary);
+}
+
+@media (max-width: 768px) {
+    .budget-row {
+        grid-template-columns: 1fr;
+        gap: 6px;
+    }
+    .budget-row-amounts,
+    .budget-row-pct {
+        text-align: left;
+    }
+    .budget-summary-stats {
+        gap: 16px;
+    }
+    .budget-stat-value {
+        font-size: 1.25rem;
+    }
+}
+</style>
+
+<div class="budget-page">
+    {{if gt .TotalBudgetCents 0}}
+    <div class="budget-summary">
+        <div class="budget-summary-header">
+            <span class="budget-summary-title">Monthly Budget</span>
+            <span style="color: var(--text-muted); font-size: 0.85rem;">
+                {{.PeriodStart}} to {{.PeriodEnd}}
+            </span>
+        </div>
+        <div class="budget-summary-stats">
+            <div class="budget-stat">
+                <span class="budget-stat-label">Budget</span>
+                <span class="budget-stat-value">{{formatUSD .TotalBudgetCents}}</span>
+            </div>
+            <div class="budget-stat">
+                <span class="budget-stat-label">Spent</span>
+                <span class="budget-stat-value">{{formatUSD .TotalSpentCents}}</span>
+            </div>
+            <div class="budget-stat">
+                <span class="budget-stat-label">Remaining</span>
+                {{$remaining := sub .TotalBudgetCents .TotalSpentCents}}
+                <span class="budget-stat-value {{if ge $remaining 0}}positive{{else}}negative{{end}}">
+                    {{if lt $remaining 0}}-{{end}}{{formatUSD (absInt $remaining)}}
+                </span>
+            </div>
+        </div>
+        <div class="budget-progress-bar">
+            {{$pct := clamp .TotalPercent 0.0 100.0}}
+            <div class="budget-progress-fill {{if lt .TotalPercent 80.0}}green{{else if lt .TotalPercent 100.0}}yellow{{else}}red{{end}}"
+                 style="width: {{formatPercent $pct}}%"></div>
+        </div>
+        <div style="text-align: right; margin-top: 4px; font-size: 0.8rem; color: var(--text-muted);">
+            {{formatPercent .TotalPercent}}% used
+        </div>
+    </div>
+    {{end}}
+
+    <div class="budget-categories">
+        <div class="budget-categories-header">
+            <span class="budget-categories-title">Category Budgets</span>
+        </div>
+
+        {{if eq (len .BudgetRows) 0}}
+        <div class="budget-empty">
+            <h3>No budget targets set</h3>
+            <p>Add a target below to start tracking your spending against goals.</p>
+        </div>
+        {{end}}
+
+        {{range .BudgetRows}}
+        {{if gt .TargetCents 0}}
+        <div class="budget-row" data-category="{{.CategoryID}}">
+            <div class="budget-row-category">
+                <span class="icon">{{.CategoryIcon}}</span>
+                {{.CategoryName}}
+            </div>
+            <div class="budget-row-bar">
+                <div class="budget-progress-bar">
+                    {{$pct := clamp .Percent 0.0 100.0}}
+                    <div class="budget-progress-fill {{if lt .Percent 80.0}}green{{else if lt .Percent 100.0}}yellow{{else}}red{{end}}"
+                         style="width: {{formatPercent $pct}}%"></div>
+                </div>
+            </div>
+            <div class="budget-row-amounts drillable"
+                 onclick="event.stopPropagation(); finDrilldown.open('category:{{.CategoryID}}')"
+                 title="View transactions"
+                 tabindex="0" role="button" aria-label="View transactions for {{.CategoryName}}"
+                 onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();finDrilldown.open('category:{{.CategoryID}}')}">
+                <span class="spent">{{formatUSD .SpentCents}}</span>
+                / {{formatUSD .TargetCents}}
+            </div>
+            <div class="budget-row-pct {{if lt .Percent 80.0}}green{{else if lt .Percent 100.0}}yellow{{else}}red{{end}}">
+                {{formatPercent .Percent}}%
+            </div>
+        </div>
+        {{end}}
+        {{end}}
+
+        {{if .HasUnbudgeted}}
+        <div class="unbudgeted-divider">Unbudgeted spending</div>
+        {{range .BudgetRows}}
+        {{if and (eq .TargetCents 0) (gt .SpentCents 0)}}
+        <div class="budget-row" data-category="{{.CategoryID}}">
+            <div class="budget-row-category" style="color: var(--text-secondary);">
+                <span class="icon">{{.CategoryIcon}}</span>
+                {{.CategoryName}}
+            </div>
+            <div class="budget-row-bar"></div>
+            <div class="budget-row-amounts drillable"
+                 onclick="event.stopPropagation(); finDrilldown.open('category:{{.CategoryID}}')"
+                 title="View transactions"
+                 tabindex="0" role="button" aria-label="View transactions for {{.CategoryName}}"
+                 onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();finDrilldown.open('category:{{.CategoryID}}')}">
+                <span class="spent">{{formatUSD .SpentCents}}</span>
+                <span style="color: var(--text-muted);">no target</span>
+            </div>
+            <div class="budget-row-pct" style="color: var(--text-muted);">--</div>
+        </div>
+        {{end}}
+        {{end}}
+        {{end}}
+
+        <div class="add-target-form">
+            <select id="budgetCategorySelect">
+                <option value="">Select category...</option>
+                {{range .AllCategories}}
+                <option value="{{.ID}}">{{.Icon}} {{.Name}}</option>
+                {{end}}
+            </select>
+            <span style="color: var(--text-muted);">$</span>
+            <input type="number" id="budgetAmountInput" placeholder="0" min="0" step="1"
+                   style="width: 100px;" />
+            <span style="color: var(--text-muted); font-size: 0.85rem;">/mo</span>
+            <button class="btn-add" onclick="setBudgetTarget()">Set Target</button>
+            <span id="budgetFormError" role="alert" style="color: var(--accent-red); font-size: 0.85rem; display: none;"></span>
+        </div>
+    </div>
+</div>
+
+<script>
+function showBudgetFormError(msg) {
+    const el = document.getElementById('budgetFormError');
+    if (!el) return;
+    el.textContent = msg;
+    el.style.display = msg ? 'inline' : 'none';
+}
+
+async function setBudgetTarget() {
+    const select = document.getElementById('budgetCategorySelect');
+    const input = document.getElementById('budgetAmountInput');
+    const categoryId = select.value;
+    const amount = parseInt(input.value, 10);
+
+    if (!categoryId) { showBudgetFormError('Select a category first.'); select.focus(); return; }
+    if (!amount || amount < 0) { showBudgetFormError('Enter a valid amount greater than 0.'); input.focus(); return; }
+    showBudgetFormError('');
+
+    try {
+        const resp = await fetch('/api/budget/target', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                category_id: categoryId,
+                monthly_target_cents: amount * 100,
+            }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json();
+            showBudgetFormError(err.error || 'Failed to set target.');
+            return;
+        }
+        location.reload();
+    } catch (e) {
+        showBudgetFormError('Error: ' + e.message);
+    }
+}
+
+async function actuallyDeleteBudgetTarget(categoryId) {
+    try {
+        const resp = await fetch('/api/budget/target/' + encodeURIComponent(categoryId), {
+            method: 'DELETE',
+        });
+        if (!resp.ok) {
+            showBudgetFormError('Failed to remove target.');
+            return;
+        }
+        location.reload();
+    } catch (e) {
+        showBudgetFormError('Error: ' + e.message);
+    }
+}
+
+function deleteBudgetTarget(categoryId) {
+    const row = document.querySelector('.budget-row[data-category="' + categoryId + '"]');
+    if (!row) { actuallyDeleteBudgetTarget(categoryId); return; }
+    const actionsCell = row.querySelector('.budget-row-actions');
+    if (!actionsCell) { actuallyDeleteBudgetTarget(categoryId); return; }
+
+    const original = actionsCell.innerHTML;
+    actionsCell.innerHTML =
+        '<span style="font-size:0.8rem; color:var(--text-secondary); white-space:nowrap;">' +
+        '<span id="confirmDeleteBtn" style="color:var(--accent-red);cursor:pointer;font-weight:600;" tabindex="0" role="button">Delete?</span>' +
+        '&nbsp;<span id="cancelDeleteBtn" style="color:var(--accent-blue);cursor:pointer;" tabindex="0" role="button">Cancel</span>' +
+        '</span>';
+
+    actionsCell.querySelector('#confirmDeleteBtn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        actuallyDeleteBudgetTarget(categoryId);
+    });
+    actionsCell.querySelector('#confirmDeleteBtn').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); actuallyDeleteBudgetTarget(categoryId); }
+    });
+    actionsCell.querySelector('#cancelDeleteBtn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        actionsCell.innerHTML = original;
+        const newBtn = actionsCell.querySelector('.btn-icon.delete');
+        if (newBtn) newBtn.addEventListener('click', (ev) => { ev.stopPropagation(); deleteBudgetTarget(categoryId); });
+    });
+    actionsCell.querySelector('#cancelDeleteBtn').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault(); e.stopPropagation();
+            actionsCell.innerHTML = original;
+            const newBtn = actionsCell.querySelector('.btn-icon.delete');
+            if (newBtn) newBtn.addEventListener('click', (ev) => { ev.stopPropagation(); deleteBudgetTarget(categoryId); });
+        }
+    });
+    actionsCell.querySelector('#confirmDeleteBtn').focus();
+}
+
+document.querySelectorAll('.budget-row').forEach(row => {
+    const catId = row.dataset.category;
+    if (!catId) return;
+
+    const pctCell = row.querySelector('.budget-row-pct');
+    if (pctCell && pctCell.textContent.trim() !== '--') {
+        const actions = document.createElement('div');
+        actions.className = 'budget-row-actions';
+        actions.innerHTML = '<button class="btn-icon delete" onclick="event.stopPropagation(); deleteBudgetTarget(\'' + catId + '\')" title="Remove target" aria-label="Remove budget target">&#10005;</button>';
+        row.appendChild(actions);
+        row.style.gridTemplateColumns = '200px 1fr 120px 80px 40px';
+    }
+
+    row.style.cursor = 'pointer';
+    row.addEventListener('click', () => {
+        const select = document.getElementById('budgetCategorySelect');
+        select.value = catId;
+        document.getElementById('budgetAmountInput').focus();
+        select.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+});
+</script>
+{{end}}

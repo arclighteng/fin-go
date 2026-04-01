@@ -1,0 +1,411 @@
+{{define "base"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{block "title" .}}Fin{{end}}</title>
+    <link rel="stylesheet" href="/static/css/app.css">
+    <!-- Chart.js for visualizations -->
+    <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
+            integrity="sha384-6DXHkyvIEkiD08Op4DD1tCYBPlcEYPo+ReZsJfqWnhBSFhJPpMDQ/hMkunxJIjig"
+            crossorigin="anonymous"></script>
+</head>
+<body>
+    <script>
+        // Load theme preference immediately to prevent flash
+        (function() {
+            var saved = localStorage.getItem('theme');
+            if (saved === 'dark') {
+                document.body.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    <nav class="nav">
+        <a href="/" class="nav-brand">Fin <span class="nav-version">Beta {{.AppVersion}}</span></a>
+        <div class="nav-links">
+            <a href="/dashboard"{{if eq .ActiveNav "dashboard"}} class="active"{{end}}>Dashboard</a>
+            <a href="/connect"{{if eq .ActiveNav "connect"}} class="active"{{end}}>Connect</a>
+            <a href="/sync-log"{{if eq .ActiveNav "sync-log"}} class="active"{{end}}>Sync Log</a>
+        </div>
+        <div class="sync-container">
+            <span id="syncStatus" class="sync-status"></span>
+            <button id="syncBtn" class="sync-btn" onclick="triggerSync()" title="Sync all accounts with SimpleFIN">
+                <span class="sync-icon">&#8635;</span>
+                <span class="sync-text">Sync Accounts</span>
+            </button>
+        </div>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark mode">
+            <span class="theme-icon-light">&#9728;&#65039;</span>
+            <span class="theme-icon-dark">&#127769;</span>
+        </button>
+    </nav>
+
+    {{if .IsEmpty}}
+    <div class="demo-banner" id="demoBanner">
+        <span class="demo-banner-text">No data yet. Import a bank CSV or connect via SimpleFIN to get started.</span>
+        <div class="demo-banner-actions">
+            <a href="/connect" class="demo-banner-btn demo-banner-btn-primary">Import CSV</a>
+            <a href="/connect#simplefin" class="demo-banner-btn demo-banner-btn-secondary">Connect via SimpleFIN</a>
+        </div>
+    </div>
+    {{end}}
+
+    {{if .IsDemo}}
+    <div class="demo-banner" id="demoBanner">
+        <span class="demo-banner-text">You&#39;re viewing demo data. Connect your bank to see your real finances.</span>
+        <div class="demo-banner-actions">
+            <a href="/connect" class="demo-banner-btn demo-banner-btn-primary">Import CSV</a>
+            <a href="/connect#simplefin" class="demo-banner-btn demo-banner-btn-secondary">Connect via SimpleFIN</a>
+        </div>
+        <button class="demo-banner-dismiss" onclick="finDismissDemo()" aria-label="Dismiss demo banner">&#10005;</button>
+    </div>
+    <script>
+        (function() {
+            if (localStorage.getItem('fin_demo_dismissed') === '1') {
+                var banner = document.getElementById('demoBanner');
+                if (banner) banner.style.display = 'none';
+            }
+        })();
+        function finDismissDemo() {
+            localStorage.setItem('fin_demo_dismissed', '1');
+            var banner = document.getElementById('demoBanner');
+            if (banner) banner.style.display = 'none';
+        }
+    </script>
+    {{end}}
+
+    <div id="main-content" class="container">
+        {{block "content" .}}{{end}}
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <!-- Drilldown Modal -->
+    <div id="drilldownModal" class="modal" style="display: none;">
+        <div class="modal-content drilldown-modal">
+            <div class="modal-header">
+                <h3 id="drilldownTitle">Loading...</h3>
+                <button class="modal-close" onclick="finDrilldown.close()">&times;</button>
+            </div>
+            <div id="drilldownSummary" class="drilldown-summary-strip"></div>
+            <div id="drilldownFilters" class="drilldown-filters" style="display:none;"></div>
+            <div class="modal-body drilldown-body"><div id="drilldownTable"></div></div>
+            <div id="drilldownFooter" class="drilldown-footer"></div>
+        </div>
+    </div>
+
+    <!-- Category Change Modal -->
+    <div id="categoryModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Change Category</h3>
+                <button class="modal-close" onclick="closeCategoryModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="categoryModalMerchant" style="font-weight: 500; margin-bottom: 12px;"></p>
+                <div id="categoryModalList" class="category-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================================
+        // Fin API helpers
+        // ============================================================
+        var finApi = {
+            postJSON: async function(url, data) {
+                return fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data),
+                });
+            }
+        };
+
+        // ============================================================
+        // UI helpers
+        // ============================================================
+        var finUI = {
+            escapeHtml: function(str) {
+                if (str == null) return '';
+                return String(str)
+                    .replace(/&/g,'&amp;')
+                    .replace(/</g,'&lt;')
+                    .replace(/>/g,'&gt;')
+                    .replace(/"/g,'&quot;');
+            }
+        };
+
+        // ============================================================
+        // Toast notifications
+        // ============================================================
+        function showToast(msg) {
+            var toast = document.getElementById('toast');
+            if (!toast) return;
+            toast.textContent = msg;
+            toast.classList.add('visible');
+            setTimeout(function() { toast.classList.remove('visible'); }, 3000);
+        }
+
+        function showToastWithAction(msg, actionLabel, actionFn) {
+            var toast = document.getElementById('toast');
+            if (!toast) return;
+            toast.innerHTML = finUI.escapeHtml(msg) +
+                ' <button onclick="(' + actionFn.toString() + ')()" style="margin-left:8px;background:none;border:none;color:inherit;text-decoration:underline;cursor:pointer;">' +
+                finUI.escapeHtml(actionLabel) + '</button>';
+            toast.classList.add('visible');
+            setTimeout(function() { toast.classList.remove('visible'); }, 6000);
+        }
+
+        // ============================================================
+        // Drilldown stub (replaced by fin_drilldown.js when available)
+        // ============================================================
+        if (typeof finDrilldown === 'undefined') {
+            window.finDrilldown = {
+                open: function(s) { console.warn('Drilldown not available for scope:', s); },
+                close: function() {}
+            };
+        }
+
+        // ============================================================
+        // Sync status
+        // ============================================================
+        async function loadSyncStatus() {
+            var statusEl = document.getElementById('syncStatus');
+            if (!statusEl) return;
+
+            try {
+                var response = await fetch('/api/sync-status');
+                var data = await response.json();
+
+                if (!data.has_synced) {
+                    statusEl.innerHTML = '<span style="color: var(--accent-yellow);">Never synced</span>';
+                    return;
+                }
+
+                var lastSync = new Date(data.last_sync.timestamp);
+                var now = new Date();
+                var diffHours = Math.floor((now - lastSync) / (1000 * 60 * 60));
+                var diffDays = Math.floor(diffHours / 24);
+
+                var timeAgo;
+                if (diffDays > 0) {
+                    timeAgo = diffDays + 'd ago';
+                } else if (diffHours > 0) {
+                    timeAgo = diffHours + 'h ago';
+                } else {
+                    timeAgo = 'Just now';
+                }
+
+                var dataInfo = '';
+                if (data.data_range) {
+                    var formatDate = function(iso) {
+                        var d = new Date(iso);
+                        var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                        return months[d.getMonth()] + " '" + String(d.getFullYear()).slice(2);
+                    };
+                    dataInfo = '<br><span class="sync-range">Data: ' + formatDate(data.data_range.earliest) + ' \u2013 ' + formatDate(data.data_range.latest) + '</span>';
+                }
+
+                statusEl.innerHTML = '<span class="sync-time">Synced: ' + timeAgo + '</span>' + dataInfo;
+            } catch (err) {
+                statusEl.innerHTML = '';
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', loadSyncStatus);
+
+        // ============================================================
+        // Sync trigger
+        // ============================================================
+        async function triggerSync() {
+            var btn = document.getElementById('syncBtn');
+            var textEl = btn.querySelector('.sync-text');
+            var iconEl = btn.querySelector('.sync-icon');
+            var originalText = textEl.textContent;
+
+            btn.classList.add('syncing');
+            btn.classList.remove('success', 'error');
+            textEl.textContent = 'Syncing...';
+
+            try {
+                var response = await finApi.postJSON('/api/sync', {});
+                var data = await response.json();
+
+                btn.classList.remove('syncing');
+
+                if (response.ok) {
+                    btn.classList.add('success');
+                    iconEl.textContent = '\u2713';
+                    textEl.textContent = '+' + data.inserted + ' new';
+
+                    if (data.inserted > 0 || data.updated > 0) {
+                        showToastWithAction(
+                            'Synced: ' + data.fetched + ' from bank, ' + data.inserted + ' new, ' + data.updated + ' updated',
+                            'Refresh',
+                            function() { window.location.reload(); }
+                        );
+                    } else {
+                        showToast('Synced: ' + data.fetched + ' from bank, no new transactions');
+                    }
+
+                    var statusEl = document.getElementById('syncStatus');
+                    if (statusEl) {
+                        var existingRange = statusEl.querySelector('.sync-range');
+                        var rangeHtml = existingRange ? '<br>' + existingRange.outerHTML : '';
+                        statusEl.innerHTML = '<span class="sync-time">Synced: Just now</span>' + rangeHtml;
+                    }
+                    setTimeout(loadSyncStatus, 1500);
+                } else {
+                    btn.classList.add('error');
+                    iconEl.textContent = '\u2717';
+                    textEl.textContent = 'Error';
+                    showToast('Sync failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch (err) {
+                btn.classList.remove('syncing');
+                btn.classList.add('error');
+                var iconEl2 = btn.querySelector('.sync-icon');
+                iconEl2.textContent = '\u2717';
+                textEl.textContent = 'Error';
+                showToast('Sync failed: ' + err.message);
+            }
+
+            setTimeout(function() {
+                btn.classList.remove('success', 'error');
+                textEl.textContent = originalText;
+                btn.querySelector('.sync-icon').textContent = '\u21BB';
+            }, 5000);
+        }
+
+        // ============================================================
+        // Theme toggle
+        // ============================================================
+        function toggleTheme() {
+            var current = document.body.getAttribute('data-theme');
+            var next = current === 'dark' ? 'light' : 'dark';
+            if (next === 'dark') {
+                document.body.setAttribute('data-theme', 'dark');
+                localStorage.setItem('theme', 'dark');
+            } else {
+                document.body.removeAttribute('data-theme');
+                localStorage.setItem('theme', 'light');
+            }
+        }
+
+        // ============================================================
+        // Alert actions
+        // ============================================================
+        async function alertAction(alertKey, action) {
+            try {
+                var response = await finApi.postJSON('/api/alert-action', { alert_key: alertKey, action: action });
+                if (response.ok) {
+                    var alertEl = document.querySelector('[data-alert-key="' + alertKey + '"]');
+                    if (alertEl) {
+                        if (action === 'ack') {
+                            alertEl.remove();
+                        } else {
+                            alertEl.classList.add('actioned');
+                        }
+                    }
+                    showToast(action === 'ack' ? 'Dismissed' : 'Marked as ' + action);
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message);
+            }
+        }
+
+        // ============================================================
+        // Category override modal
+        // ============================================================
+        var categoryModalMerchant = null;
+        var categoryModalCurrentCategory = null;
+        var categoriesCache = null;
+
+        function openCategoryModalFromButton(buttonEl, currentCategory) {
+            var merchantEl = buttonEl.closest('.drilldown-merchant');
+            var merchant = merchantEl.dataset.merchantName;
+            openCategoryModal(merchant, currentCategory);
+        }
+
+        async function openCategoryModal(merchant, currentCategory) {
+            categoryModalMerchant = merchant;
+            categoryModalCurrentCategory = currentCategory;
+
+            document.getElementById('categoryModalMerchant').textContent = 'Merchant: ' + merchant;
+            var modal = document.getElementById('categoryModal');
+            var listEl = document.getElementById('categoryModalList');
+
+            if (!categoriesCache) {
+                try {
+                    var resp = await fetch('/api/categories');
+                    var data = await resp.json();
+                    categoriesCache = data;
+                } catch (err) {
+                    showToast('Error loading categories');
+                    return;
+                }
+            }
+
+            listEl.innerHTML = categoriesCache.map(function(cat) {
+                return '<div class="category-option' + (cat.id === currentCategory ? ' selected' : '') +
+                    '" onclick="selectCategory(\'' + finUI.escapeHtml(cat.id) + '\')">' +
+                    '<span class="category-option-icon">' + finUI.escapeHtml(cat.icon) + '</span>' +
+                    '<span class="category-option-name">' + finUI.escapeHtml(cat.name) + '</span>' +
+                    '</div>';
+            }).join('');
+
+            modal.style.display = 'flex';
+        }
+
+        function closeCategoryModal() {
+            document.getElementById('categoryModal').style.display = 'none';
+            categoryModalMerchant = null;
+            categoryModalCurrentCategory = null;
+        }
+
+        async function selectCategory(categoryId) {
+            if (!categoryModalMerchant) return;
+            try {
+                var response = await finApi.postJSON('/api/category-override', {
+                    merchant: categoryModalMerchant,
+                    category_id: categoryId
+                });
+                if (response.ok) {
+                    showToast('Category updated');
+                    closeCategoryModal();
+                    setTimeout(function() { window.location.reload(); }, 500);
+                } else {
+                    var data = await response.json();
+                    showToast('Error: ' + (data.error || 'Failed to update'));
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message);
+            }
+        }
+
+        document.getElementById('categoryModal')?.addEventListener('click', function(e) {
+            if (e.target === this) closeCategoryModal();
+        });
+
+        // ============================================================
+        // Income source marking
+        // ============================================================
+        async function markIncome(merchant, isIncome) {
+            try {
+                var response = await finApi.postJSON('/api/income-source', { merchant: merchant, is_income: isIncome });
+                if (response.ok) {
+                    showToast(isIncome ? 'Marked as income' : 'Excluded from income');
+                    setTimeout(function() { window.location.reload(); }, 500);
+                }
+            } catch (err) {
+                showToast('Error: ' + err.message);
+            }
+        }
+    </script>
+
+    {{block "scripts" .}}{{end}}
+</body>
+</html>
+{{end}}
