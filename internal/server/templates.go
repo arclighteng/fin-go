@@ -3,13 +3,13 @@ package server
 import (
 	"fmt"
 	"html/template"
+	"io/fs"
 	"math"
 	"net/http"
-	"path/filepath"
 	"strings"
 )
 
-// TemplateEngine loads and caches Go html/template files from a directory.
+// TemplateEngine loads and caches Go html/template files.
 // All templates share a common set of utility functions registered at
 // construction time.
 type TemplateEngine struct {
@@ -17,18 +17,15 @@ type TemplateEngine struct {
 	version string
 }
 
-// NewTemplateEngine parses all *.html files in dir and returns a ready
-// TemplateEngine. Templates are parsed once and cached for the lifetime of
-// the engine; restart the server to pick up changes.
-// version is the build version string shown in the nav bar.
-func NewTemplateEngine(dir, version string) (*TemplateEngine, error) {
-	pattern := filepath.Join(dir, "*.html")
-
+// NewTemplateEngineFS parses all *.html files from an fs.FS (e.g. embed.FS)
+// and returns a ready TemplateEngine. The fsys should contain the html files
+// directly (e.g. use fs.Sub to strip a prefix like "templates").
+func NewTemplateEngineFS(fsys fs.FS, version string) (*TemplateEngine, error) {
 	tmpl := template.New("").Funcs(templateFuncs())
 
-	parsed, err := tmpl.ParseGlob(pattern)
+	parsed, err := tmpl.ParseFS(fsys, "*.html")
 	if err != nil {
-		return nil, fmt.Errorf("parse templates from %s: %w", dir, err)
+		return nil, fmt.Errorf("parse templates from embedded FS: %w", err)
 	}
 
 	return &TemplateEngine{tmpl: parsed, version: version}, nil

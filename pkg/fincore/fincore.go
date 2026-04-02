@@ -65,6 +65,6 @@ func NewServer(cfg *Config) (*Server, error) {
 	if version == "" {
 		version = "dev"
 	}
-	handler := server.New(database, cfg, "", "", version)
+	handler := server.New(database, cfg, version)
 	return &Server{handler: handler, db: database}, nil
 }

@@ -2,10 +2,9 @@ package server
 
 import (
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -164,17 +163,17 @@ type SyncLogData struct {
 // -----------------------------------------------------------------------------
 
 // RegisterViewRoutes mounts server-rendered page routes on r.
-// templateDir is the path to the ui/templates directory;
-// staticDir is the path to the ui/static directory (served at /static/).
+// templateFS should contain *.html files at the root (e.g. fs.Sub(embed, "templates")).
+// staticFS should contain the static tree at the root (e.g. fs.Sub(embed, "static")).
 // version is the build version string shown in the nav bar.
-func RegisterViewRoutes(r chi.Router, database *db.DB, templateDir, staticDir, version string) error {
-	tmpl, err := NewTemplateEngine(templateDir, version)
+func RegisterViewRoutes(r chi.Router, database *db.DB, templateFS, staticFS fs.FS, version string) error {
+	tmpl, err := NewTemplateEngineFS(templateFS, version)
 	if err != nil {
 		return fmt.Errorf("init template engine: %w", err)
 	}
 
 	// Serve static assets.
-	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
+	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 
 	// Page routes.
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
@@ -707,38 +706,4 @@ func currentYMD() [3]int {
 	return [3]int{y, int(m), d}
 }
 
-// -----------------------------------------------------------------------------
-// Default path helpers (for use from main/cli)
-// -----------------------------------------------------------------------------
 
-// DefaultTemplateDir returns the path to ui/templates resolved relative to the
-// executable's directory. Falls back to the working directory if the executable
-// path cannot be determined.
-func DefaultTemplateDir() string {
-	return defaultAssetDir("ui", "templates")
-}
-
-// DefaultStaticDir returns the path to ui/static resolved relative to the
-// executable's directory.
-func DefaultStaticDir() string {
-	return defaultAssetDir("ui", "static")
-}
-
-// defaultAssetDir resolves an asset path relative to the executable's directory.
-// It tries: (1) exe dir/../ui/X, (2) exe dir/ui/X, (3) ./ui/X.
-func defaultAssetDir(parts ...string) string {
-	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		// The exe may be in go/ (same level as ui/) or in go/e2e/ (one level deeper).
-		candidates := []string{
-			filepath.Clean(filepath.Join(exeDir, "..", filepath.Join(parts...))),
-			filepath.Clean(filepath.Join(exeDir, filepath.Join(parts...))),
-		}
-		for _, c := range candidates {
-			if info, err := os.Stat(c); err == nil && info.IsDir() {
-				return c
-			}
-		}
-	}
-	return filepath.Join(parts...)
-}

@@ -34,9 +34,7 @@ func newTestServer(t *testing.T) http.Handler {
 		Timezone: "UTC",
 	}
 
-	// Pass empty strings so the server uses defaults (template views will fall
-	// back to stubs, which is fine for API-only handler tests).
-	return server.New(database, cfg, "", "", "test")
+	return server.New(database, cfg, "test")
 }
 
 // newTestServerWithDB creates a server and exposes the database for seeding.
@@ -57,7 +55,7 @@ func newTestServerWithDB(t *testing.T) (http.Handler, *db.DB) {
 		Timezone: "UTC",
 	}
 
-	return server.New(database, cfg, "", "", "test"), database
+	return server.New(database, cfg, "test"), database
 }
 
 // ---------------------------------------------------------------------------

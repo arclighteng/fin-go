@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"io/fs"
 	"log"
 	"net/http"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/arclighteng/fin-go/internal/config"
 	"github.com/arclighteng/fin-go/internal/db"
 	"github.com/arclighteng/fin-go/internal/models"
+	"github.com/arclighteng/fin-go/ui"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -21,10 +23,9 @@ type Server struct {
 }
 
 // New creates the HTTP handler with all routes.
-// templateDir and staticDir specify the paths to the UI assets.
-// Pass empty strings to use the defaults derived from the binary location.
 // version is the build version string (injected via -ldflags); defaults to "dev".
-func New(database *db.DB, cfg *config.Config, templateDir, staticDir, version string) http.Handler {
+// Templates and static assets are embedded in the binary via go:embed.
+func New(database *db.DB, cfg *config.Config, version string) http.Handler {
 	if version == "" {
 		version = "dev"
 	}
@@ -41,22 +42,18 @@ func New(database *db.DB, cfg *config.Config, templateDir, staticDir, version st
 	r.Use(securityHeaders)
 	r.Use(csrfProtection)
 
-	// Template-rendered pages (dashboard, connect, sync-log).
-	if templateDir == "" {
-		templateDir = DefaultTemplateDir()
-	}
-	if staticDir == "" {
-		staticDir = DefaultStaticDir()
-	}
-	if err := RegisterViewRoutes(r, database, templateDir, staticDir, version); err != nil {
+	// Embedded UI assets.
+	templateFS, _ := fs.Sub(ui.Templates, "templates")
+	staticFS, _ := fs.Sub(ui.Static, "static")
+
+	if err := RegisterViewRoutes(r, database, templateFS, staticFS, version); err != nil {
 		log.Printf("WARN: template views disabled: %v", err)
-		// Fall back to stub handlers if templates are missing.
 		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/dashboard", http.StatusFound)
 		})
 		r.Get("/dashboard", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write([]byte("<html><body><h1>fin dashboard</h1><p>Templates not found. Run from the go/ directory or set FIN_TEMPLATES_DIR.</p></body></html>"))
+			w.Write([]byte("<html><body><h1>fin dashboard</h1><p>Templates failed to load.</p></body></html>"))
 		})
 	}
 

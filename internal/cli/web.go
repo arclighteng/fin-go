@@ -38,7 +38,7 @@ var webCmd = &cobra.Command{
 			return fmt.Errorf("initialize database: %w", err)
 		}
 
-		srv := server.New(database, cfg, "", "", appVersion)
+		srv := server.New(database, cfg, appVersion)
 		addr := fmt.Sprintf("%s:%d", webHost, webPort)
 
 		httpServer := &http.Server{

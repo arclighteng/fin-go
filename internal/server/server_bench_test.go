@@ -74,9 +74,7 @@ func newBenchHandler(b *testing.B) http.Handler {
 
 	cfg := &config.Config{Timezone: "UTC"}
 
-	// Pass empty template/static dirs; the server falls back to stub handlers
-	// for HTML routes but all JSON API routes remain fully functional.
-	return server.New(d, cfg, "", "", "bench")
+	return server.New(d, cfg, "bench")
 }
 
 func BenchmarkHealthEndpoint(b *testing.B) {
