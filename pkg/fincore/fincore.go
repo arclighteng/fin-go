@@ -46,6 +46,8 @@ func (s *Server) Close() error {
 // NewServer creates the fin HTTP handler. The returned *Server implements
 // http.Handler and can be wrapped with additional middleware (e.g., authentication).
 // Callers must call Close() on the returned server to release the database connection.
+//
+// Set cfg.Version to the application version string; it defaults to "dev" when empty.
 func NewServer(cfg *Config) (*Server, error) {
 	config.EnsureDataDir(cfg.DBPath)
 
@@ -59,6 +61,10 @@ func NewServer(cfg *Config) (*Server, error) {
 		return nil, fmt.Errorf("initialize database: %w", err)
 	}
 
-	handler := server.New(database, cfg, "", "", "dev")
+	version := cfg.Version
+	if version == "" {
+		version = "dev"
+	}
+	handler := server.New(database, cfg, "", "", version)
 	return &Server{handler: handler, db: database}, nil
 }

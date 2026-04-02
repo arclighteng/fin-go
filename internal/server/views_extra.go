@@ -384,6 +384,9 @@ func queryCategoryActuals(database *db.DB, startISO, endISO string) map[string]i
 		}
 		result[catID] = total
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("rows iteration error: %v", err)
+	}
 	return result
 }
 
@@ -447,6 +450,9 @@ func handleCommitmentsView(w http.ResponseWriter, r *http.Request, database *db.
 		}
 		row.confirmed = confirmed != 0
 		allRows = append(allRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("rows iteration error: %v", err)
 	}
 
 	toCommitmentRow := func(rr rawRow) CommitmentRow {
@@ -785,6 +791,9 @@ func queryTopMerchants(database *db.DB, startISO, endISO string, accountFilter [
 		m.Status = "untracked"
 		out = append(out, m)
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("rows iteration error: %v", err)
+	}
 	return out
 }
 
@@ -864,6 +873,9 @@ func queryReviewQueues(
 			})
 		}
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("rows iteration error: %v", err)
+	}
 	return
 }
 
@@ -920,6 +932,9 @@ func queryReviewCoverage(
 		if conf >= 0.8 {
 			highConf++
 		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("rows iteration error: %v", err)
 	}
 
 	catPct := 100

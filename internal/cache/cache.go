@@ -56,21 +56,32 @@ func New(defaultTTL time.Duration, maxEntries int) *Cache {
 // Get returns the cached value for key and true if the entry exists and has
 // not expired. Returns nil, false otherwise.
 func (c *Cache) Get(key string) (any, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	c.mu.RLock()
 	e, ok := c.entries[key]
 	if !ok {
 		c.misses++
+		c.mu.RUnlock()
 		return nil, false
 	}
-	if time.Now().After(e.expiresAt) {
-		delete(c.entries, key)
+	expired := time.Now().After(e.expiresAt)
+	c.mu.RUnlock()
+
+	if expired {
+		c.mu.Lock()
+		// Re-check under write lock to avoid a race where another goroutine
+		// already deleted or refreshed the entry.
+		if e2, ok2 := c.entries[key]; ok2 && time.Now().After(e2.expiresAt) {
+			delete(c.entries, key)
+		}
 		c.misses++
+		c.mu.Unlock()
 		return nil, false
 	}
+
+	c.mu.Lock()
 	e.hits++
 	c.hits++
+	c.mu.Unlock()
 	return e.value, true
 }
 

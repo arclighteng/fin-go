@@ -429,7 +429,7 @@ async function setBudgetTarget() {
     try {
         const resp = await fetch('/api/budget/target', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Fin-Request': '1' },
             body: JSON.stringify({
                 category_id: categoryId,
                 monthly_target_cents: amount * 100,
@@ -450,6 +450,7 @@ async function actuallyDeleteBudgetTarget(categoryId) {
     try {
         const resp = await fetch('/api/budget/target/' + encodeURIComponent(categoryId), {
             method: 'DELETE',
+            headers: { 'X-Fin-Request': '1' },
         });
         if (!resp.ok) {
             showBudgetFormError('Failed to remove target.');

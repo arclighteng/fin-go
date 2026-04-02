@@ -66,18 +66,53 @@ func (d *DB) Init() error {
 		return fmt.Errorf("init schema: %w", err)
 	}
 
-	// Migrations: add columns if missing. "duplicate column" errors are
-	// expected on re-runs and are silently ignored. All other errors are fatal.
-	migrations := []string{
-		"ALTER TABLE transactions ADD COLUMN pending INTEGER NOT NULL DEFAULT 0",
-		"ALTER TABLE commitments ADD COLUMN direction TEXT NOT NULL DEFAULT 'expense'",
+	// Migrations: each migration is tracked in schema_versions so it runs
+	// exactly once, regardless of how many times Init is called.
+	migrations := []struct {
+		version int
+		sql     string
+	}{
+		{1, "ALTER TABLE transactions ADD COLUMN pending INTEGER NOT NULL DEFAULT 0"},
+		{2, "ALTER TABLE commitments ADD COLUMN direction TEXT NOT NULL DEFAULT 'expense'"},
 	}
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin migration transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	for _, m := range migrations {
-		if _, err := d.db.Exec(m); err != nil {
-			if !strings.Contains(err.Error(), "duplicate column") {
-				return fmt.Errorf("migration %q: %w", m, err)
+		var count int
+		if err := tx.QueryRow("SELECT COUNT(*) FROM schema_versions WHERE version = ?", m.version).Scan(&count); err != nil {
+			return fmt.Errorf("check migration version %d: %w", m.version, err)
+		}
+		if count > 0 {
+			continue // already applied
+		}
+		if _, execErr := tx.Exec(m.sql); execErr != nil {
+			// SQLite does not support ADD COLUMN IF NOT EXISTS. A column that
+			// already exists (because the DDL was updated) causes a "duplicate
+			// column name" error. Treat that as a no-op so that fresh in-memory
+			// databases (used in tests) and upgraded production databases both
+			// work without special-casing.
+			errMsg := execErr.Error()
+			if strings.Contains(errMsg, "duplicate column name") {
+				// Column already present — mark the migration as applied and continue.
+			} else {
+				return fmt.Errorf("apply migration %d: %w", m.version, execErr)
 			}
 		}
+		if _, err := tx.Exec(
+			"INSERT INTO schema_versions(version, applied_at) VALUES (?, ?)",
+			m.version, utcNowISO(),
+		); err != nil {
+			return fmt.Errorf("record migration %d: %w", m.version, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migrations: %w", err)
 	}
 
 	// Initialize sub-module schemas (idempotent CREATE IF NOT EXISTS statements).

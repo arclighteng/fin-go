@@ -36,7 +36,8 @@ func createProjectionSchema(t *testing.T, db *sql.DB) {
 		);
 		CREATE TABLE IF NOT EXISTS subscription_candidates (
 			id                          INTEGER PRIMARY KEY AUTOINCREMENT,
-			merchant_norm               TEXT NOT NULL UNIQUE,
+			account_id                  TEXT NOT NULL DEFAULT '',
+			merchant_norm               TEXT NOT NULL,
 			monthly_cost_estimate_cents INTEGER,
 			interval_days               INTEGER,
 			last_seen_at                TEXT,
@@ -557,5 +558,88 @@ func TestProjectCashFlowNetCalculation(t *testing.T) {
 		proj.ExpectedDiscretionary
 	if proj.ExpectedNetCents != expectedNet {
 		t.Errorf("ExpectedNetCents: want %d, got %d", expectedNet, proj.ExpectedNetCents)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AccountFilter — verifies that filtered projections exclude other accounts
+// ---------------------------------------------------------------------------
+
+func TestProjectCashFlow_AccountFilter_ExcludesOtherAccounts(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	createProjectionSchema(t, db)
+
+	// Seed transactions: two accounts, only one is selected by the filter.
+	// All transactions are in the past 90 days so estimateFlexibleSpending picks them up.
+	pastDate := time.Now().UTC().AddDate(0, -1, 0).Format("2006-01-02")
+	_, err := db.Exec(`
+		INSERT INTO transactions(fingerprint, account_id, posted_at, amount_cents, merchant, pending)
+		VALUES
+		  ('fp-a1', 'acct-A', ?, -10000, 'grocery', 0),
+		  ('fp-a2', 'acct-A', ?, -5000,  'coffee',  0),
+		  ('fp-b1', 'acct-B', ?, -99999, 'excluded', 0)
+		`,
+		pastDate, pastDate, pastDate,
+	)
+	if err != nil {
+		t.Fatalf("seed transactions: %v", err)
+	}
+
+	// Project with only acct-A selected.
+	projFiltered, err := ProjectCashFlow(db, ProjectOptions{
+		DaysForward:   30,
+		AccountFilter: []string{"acct-A"},
+	})
+	if err != nil {
+		t.Fatalf("ProjectCashFlow (filtered): %v", err)
+	}
+
+	// Project with all accounts (no filter).
+	projAll, err := ProjectCashFlow(db, ProjectOptions{DaysForward: 30})
+	if err != nil {
+		t.Fatalf("ProjectCashFlow (all): %v", err)
+	}
+
+	// The filtered projection should produce lower flexible spending than the
+	// unfiltered one because acct-B's large transaction is excluded.
+	filteredSpend := projFiltered.ExpectedVariableCents + projFiltered.ExpectedDiscretionary
+	allSpend := projAll.ExpectedVariableCents + projAll.ExpectedDiscretionary
+
+	if filteredSpend >= allSpend {
+		t.Errorf(
+			"account filter not applied: filtered spend (%d) should be < all-accounts spend (%d)",
+			filteredSpend, allSpend,
+		)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// buildPlaceholders helper
+// ---------------------------------------------------------------------------
+
+func TestBuildPlaceholders(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		n    int
+		want string
+	}{
+		{0, ""},
+		{1, "?"},
+		{2, "?, ?"},
+		{3, "?, ?, ?"},
+	}
+
+	for _, tc := range tests {
+		t.Run("", func(t *testing.T) {
+			t.Parallel()
+
+			got := buildPlaceholders(tc.n)
+			if got != tc.want {
+				t.Errorf("buildPlaceholders(%d): want %q, got %q", tc.n, tc.want, got)
+			}
+		})
 	}
 }

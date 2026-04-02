@@ -9,42 +9,21 @@ import (
 	"time"
 )
 
-// Transfer keywords used for match scoring.
-// Keywords are NOT a prerequisite for matching — they contribute a score bonus.
-var xferTransferKeywords = []string{
-	"transfer", "xfer", "ach", "wire", "zelle", "venmo", "paypal",
-	"cash app", "cashapp", "apple cash", "square cash", "wisely",
-	"online banking transfer", "mobile deposit",
-}
-
-// xferBankKeywords are matched as whole words to avoid false positives
+// xferBankPatterns holds pre-compiled word-boundary regexps for bankKeywords.
+// Bank keywords are matched as whole words to avoid false positives
 // (e.g. "purchase" must not match "chase").
-var xferBankKeywords = []string{
-	"chase", "wells fargo", "bank of america", "bofa", "citi", "citibank",
-	"capital one", "us bank", "pnc", "td bank", "ally", "discover",
-	"american express", "amex", "barclays", "synchrony", "marcus",
-	"fidelity", "schwab", "vanguard", "betterment", "wealthfront",
-	"savings", "checking", "brokerage",
-}
-
-var xferCCPaymentKeywords = []string{
-	"payment thank you", "autopay", "online payment", "payment received",
-	"credit card payment", "cc payment", "automatic payment",
-}
-
-// xferBankPatterns holds pre-compiled word-boundary regexps for bank keywords.
 var xferBankPatterns []*regexp.Regexp
 
 func init() {
-	xferBankPatterns = make([]*regexp.Regexp, len(xferBankKeywords))
-	for i, kw := range xferBankKeywords {
+	xferBankPatterns = make([]*regexp.Regexp, len(bankKeywords))
+	for i, kw := range bankKeywords {
 		xferBankPatterns[i] = regexp.MustCompile(`\b` + regexp.QuoteMeta(kw) + `\b`)
 	}
 }
 
 // xferIsTransferPattern reports whether merchant_norm contains a transfer keyword.
 func xferIsTransferPattern(merchantNorm string) bool {
-	for _, kw := range xferTransferKeywords {
+	for _, kw := range transferKeywords {
 		if strings.Contains(merchantNorm, kw) {
 			return true
 		}
@@ -64,7 +43,7 @@ func xferIsBankPattern(merchantNorm string) bool {
 
 // xferIsCCPayment reports whether merchant_norm matches a credit-card payment pattern.
 func xferIsCCPayment(merchantNorm string) bool {
-	for _, kw := range xferCCPaymentKeywords {
+	for _, kw := range ccPaymentKeywords {
 		if strings.Contains(merchantNorm, kw) {
 			return true
 		}

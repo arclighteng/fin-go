@@ -354,6 +354,9 @@ func queryAllAccounts(database *db.DB) []AccountRow {
 		}
 		accounts = append(accounts, a)
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("rows iteration error: %v", err)
+	}
 	return accounts
 }
 
@@ -453,6 +456,9 @@ func queryCategoryBreakdown(database *db.DB, startISO, endISO string, accountFil
 			NetCents:     total,
 		})
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("rows iteration error: %v", err)
+	}
 	return items
 }
 
@@ -516,6 +522,9 @@ func handleSyncLogView(w http.ResponseWriter, r *http.Request, database *db.DB, 
 				continue
 			}
 			data.Runs = append(data.Runs, run)
+		}
+		if err := runRows.Err(); err != nil {
+			log.Printf("rows iteration error: %v", err)
 		}
 	}
 
@@ -595,6 +604,9 @@ func scanRecentTxns(rows interface {
 			continue
 		}
 		out = append(out, txn)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("rows iteration error: %v", err)
 	}
 	return out
 }

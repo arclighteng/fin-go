@@ -2,7 +2,10 @@ package server
 
 import (
 	"encoding/json"
+	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -39,7 +42,8 @@ func (s *Server) handleAPISearch(w http.ResponseWriter, r *http.Request) {
 
 	txns, err := s.db.SearchTransactions(q, limit)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPISearch: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, txns)
@@ -61,7 +65,8 @@ func (s *Server) handleAPIIncomeSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.db.SaveIncomeSource(merchant, req.IsIncome); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPIIncomeSource: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -70,7 +75,8 @@ func (s *Server) handleAPIIncomeSource(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIIncomeSources(w http.ResponseWriter, r *http.Request) {
 	sources, err := s.db.GetIncomeSources()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPIIncomeSources: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, sources)
@@ -93,7 +99,8 @@ func (s *Server) handleAPICategoryOverride(w http.ResponseWriter, r *http.Reques
 
 	if req.CategoryID == "auto" {
 		if err := s.db.DeleteCategoryOverride(merchant); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			log.Printf("handleAPICategoryOverride: DeleteCategoryOverride: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 			return
 		}
 	} else {
@@ -102,7 +109,8 @@ func (s *Server) handleAPICategoryOverride(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		if err := s.db.SaveCategoryOverride(merchant, req.CategoryID); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			log.Printf("handleAPICategoryOverride: SaveCategoryOverride: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 			return
 		}
 	}
@@ -128,7 +136,8 @@ func (s *Server) handleAPIAlertAction(w http.ResponseWriter, r *http.Request) {
 		Action:   req.Action,
 	}
 	if err := s.db.SaveAlertAction(aa); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPIAlertAction: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -138,7 +147,8 @@ func (s *Server) handleAPIGetAnnotations(w http.ResponseWriter, r *http.Request)
 	fp := chi.URLParam(r, "fingerprint")
 	note, tags, err := s.db.GetTransactionAnnotations(fp)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPIGetAnnotations: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -158,7 +168,8 @@ func (s *Server) handleAPISaveNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.db.SaveTransactionNote(fp, req.Note); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPISaveNote: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -167,7 +178,8 @@ func (s *Server) handleAPISaveNote(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIDeleteNote(w http.ResponseWriter, r *http.Request) {
 	fp := chi.URLParam(r, "fingerprint")
 	if err := s.db.DeleteTransactionNote(fp); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPIDeleteNote: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -188,7 +200,8 @@ func (s *Server) handleAPIAddTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.db.AddTransactionTag(fp, tag); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPIAddTag: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -198,7 +211,8 @@ func (s *Server) handleAPIDeleteTag(w http.ResponseWriter, r *http.Request) {
 	fp := chi.URLParam(r, "fingerprint")
 	tag := chi.URLParam(r, "tag")
 	if err := s.db.DeleteTransactionTag(fp, tag); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPIDeleteTag: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -207,7 +221,8 @@ func (s *Server) handleAPIDeleteTag(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIGetTags(w http.ResponseWriter, r *http.Request) {
 	tags, err := s.db.GetAllTags()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPIGetTags: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, tags)
@@ -216,7 +231,8 @@ func (s *Server) handleAPIGetTags(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIBudgetTargets(w http.ResponseWriter, r *http.Request) {
 	targets, err := s.db.GetBudgetTargets()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPIBudgetTargets: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, targets)
@@ -224,7 +240,7 @@ func (s *Server) handleAPIBudgetTargets(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleAPISaveBudgetTarget(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		CategoryID        string `json:"category_id"`
+		CategoryID         string `json:"category_id"`
 		MonthlyTargetCents int64  `json:"monthly_target_cents"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -236,7 +252,8 @@ func (s *Server) handleAPISaveBudgetTarget(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := s.db.SaveBudgetTarget(req.CategoryID, req.MonthlyTargetCents); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPISaveBudgetTarget: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -245,10 +262,78 @@ func (s *Server) handleAPISaveBudgetTarget(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleAPIDeleteBudgetTarget(w http.ResponseWriter, r *http.Request) {
 	catID := chi.URLParam(r, "categoryID")
 	if err := s.db.DeleteBudgetTarget(catID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPIDeleteBudgetTarget: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// privateIPBlocks lists CIDR ranges that must not be reachable via the
+// SimpleFIN access URL. These cover loopback, private, and link-local ranges.
+var privateIPBlocks []*net.IPNet
+
+func init() {
+	for _, cidr := range []string{
+		"127.0.0.0/8",    // loopback
+		"10.0.0.0/8",     // RFC 1918
+		"172.16.0.0/12",  // RFC 1918
+		"192.168.0.0/16", // RFC 1918
+		"169.254.0.0/16", // link-local
+		"::1/128",        // IPv6 loopback
+		"fc00::/7",       // IPv6 unique-local
+		"fe80::/10",      // IPv6 link-local
+	} {
+		_, block, _ := net.ParseCIDR(cidr)
+		privateIPBlocks = append(privateIPBlocks, block)
+	}
+}
+
+// isPrivateIP reports whether ip falls within any private/loopback range.
+func isPrivateIP(ip net.IP) bool {
+	for _, block := range privateIPBlocks {
+		if block.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// validateSimpleFinURL checks that u is an HTTPS URL pointing at a host
+// under simplefin.org and not at a private/loopback address.
+func validateSimpleFinURL(raw string) string {
+	if !strings.HasPrefix(raw, "https://") {
+		return "access_url must use HTTPS"
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "access_url is not a valid URL"
+	}
+	host := u.Hostname()
+
+	// If the host is a bare IP address, reject it — SimpleFIN always uses a hostname.
+	if ip := net.ParseIP(host); ip != nil {
+		if isPrivateIP(ip) {
+			return "access_url points to a private/loopback address"
+		}
+		return "access_url must be a SimpleFIN hostname, not a bare IP"
+	}
+
+	// Resolve the hostname and check that none of the IPs are private.
+	addrs, err := net.LookupHost(host)
+	if err == nil {
+		for _, addr := range addrs {
+			if ip := net.ParseIP(addr); ip != nil && isPrivateIP(ip) {
+				return "access_url resolves to a private/loopback address"
+			}
+		}
+	}
+	// Enforce that the hostname is under simplefin.org.
+	if !strings.HasSuffix(host, ".simplefin.org") && host != "simplefin.org" {
+		return "access_url hostname must end with .simplefin.org"
+	}
+
+	return ""
 }
 
 func (s *Server) handleAPISimpleFinToken(w http.ResponseWriter, r *http.Request) {
@@ -263,15 +348,15 @@ func (s *Server) handleAPISimpleFinToken(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "access_url required"})
 		return
 	}
-	if !strings.HasPrefix(req.AccessURL, "https://") {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "access_url must use HTTPS"})
+	if errMsg := validateSimpleFinURL(req.AccessURL); errMsg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": errMsg})
 		return
 	}
 
 	if err := credentials.SetSimpleFinURL(req.AccessURL); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPISimpleFinToken: SetSimpleFinURL: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
-

@@ -10,12 +10,16 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// Config holds all runtime configuration for fin.
 type Config struct {
 	SimpleFinAccessURL string
 	DBPath             string
 	LogLevel           string
 	LogFormat          string
 	Timezone           string
+	// Version is the application version string (e.g. "1.2.3" or "dev").
+	// It is injected by the embedding application or CLI at startup.
+	Version string
 }
 
 func Load() *Config {

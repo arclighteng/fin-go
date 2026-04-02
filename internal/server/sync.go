@@ -6,16 +6,25 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/arclighteng/fin-go/internal/credentials"
 	"github.com/arclighteng/fin-go/internal/simplefin"
 )
 
+// syncMu guards the rate-limit check and run recording so that concurrent
+// POST /api/sync requests cannot both pass the check before either records a run.
+var syncMu sync.Mutex
+
 func (s *Server) handleAPISync(w http.ResponseWriter, r *http.Request) {
+	syncMu.Lock()
+	defer syncMu.Unlock()
+
 	// Check rate limit
 	count, err := s.db.RunsInLast24Hours()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPISync: RunsInLast24Hours: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 	if count >= MaxSyncsPerDay {
@@ -46,31 +55,40 @@ func (s *Server) handleAPISync(w http.ResponseWriter, r *http.Request) {
 			lookbackDays = body.LookbackDays
 		}
 	}
+	// Cap lookback to two years to prevent unreasonably large API requests.
+	const maxLookbackDays = 730
+	if lookbackDays > maxLookbackDays {
+		lookbackDays = maxLookbackDays
+	}
 
 	client, err := simplefin.NewClient(accessURL)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		log.Printf("handleAPISync: NewClient: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 
 	result, err := client.Fetch(context.Background(), lookbackDays)
 	if err != nil {
+		log.Printf("handleAPISync: Fetch: %v", err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{
-			"error": "SimpleFIN fetch failed: " + err.Error(),
+			"error": "SimpleFIN fetch failed",
 		})
 		return
 	}
 
 	// Upsert accounts
 	if err := s.db.UpsertAccounts(result.Accounts); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "upsert accounts: " + err.Error()})
+		log.Printf("handleAPISync: UpsertAccounts: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 
 	// Upsert transactions
 	inserted, updated, err := s.db.UpsertTransactions(result.Transactions)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "upsert transactions: " + err.Error()})
+		log.Printf("handleAPISync: UpsertTransactions: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
 

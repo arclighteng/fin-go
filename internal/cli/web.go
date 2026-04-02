@@ -1,9 +1,14 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/arclighteng/fin-go/internal/config"
 	"github.com/arclighteng/fin-go/internal/db"
@@ -12,9 +17,8 @@ import (
 )
 
 var (
-	webHost  string
-	webPort  int
-	webNoTLS bool
+	webHost string
+	webPort int
 )
 
 var webCmd = &cobra.Command{
@@ -37,13 +41,31 @@ var webCmd = &cobra.Command{
 		srv := server.New(database, cfg, "", "", appVersion)
 		addr := fmt.Sprintf("%s:%d", webHost, webPort)
 
+		httpServer := &http.Server{
+			Addr:    addr,
+			Handler: srv,
+		}
+
+		// Graceful shutdown on SIGINT/SIGTERM.
+		go func() {
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+			<-sigCh
+			log.Println("Shutting down gracefully...")
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = httpServer.Shutdown(ctx)
+		}()
+
 		log.Printf("Starting fin %s on http://%s", appVersion, addr)
-		return http.ListenAndServe(addr, srv)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return nil
 	},
 }
 
 func init() {
 	webCmd.Flags().StringVar(&webHost, "host", "127.0.0.1", "Host to bind to")
 	webCmd.Flags().IntVar(&webPort, "port", 8000, "Port to listen on")
-	webCmd.Flags().BoolVar(&webNoTLS, "no-tls", false, "Disable TLS")
 }

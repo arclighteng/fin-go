@@ -33,10 +33,13 @@ func New(database *db.DB, cfg *config.Config, templateDir, staticDir, version st
 	r := chi.NewRouter()
 
 	// Middleware
-	r.Use(middleware.Logger)
+	// Recoverer must wrap Logger so panics are caught before the logger records
+	// the (never-written) status code.
 	r.Use(middleware.Recoverer)
+	r.Use(middleware.Logger)
 	r.Use(middleware.Timeout(30 * time.Second))
 	r.Use(securityHeaders)
+	r.Use(csrfProtection)
 
 	// Template-rendered pages (dashboard, connect, sync-log).
 	if templateDir == "" {
@@ -105,12 +108,41 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Cache-Control", "no-store, no-cache")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		// TODO(inline-js): script-src includes 'unsafe-inline' because templates use inline
+		// <script> blocks. The proper fix is to extract all inline JS into separate .js files.
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; "+
-				"script-src 'self' https://cdn.jsdelivr.net; "+
+				"script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "+
 				"style-src 'self' 'unsafe-inline'; "+
 				"img-src 'self' data:; "+
 				"font-src 'self'")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// csrfProtection rejects state-mutating requests that do not carry the
+// X-Fin-Request header. GET, HEAD, and OPTIONS are exempt because they are
+// safe / pre-flight methods.
+//
+// This is a lightweight same-origin guard: cross-origin scripts cannot set
+// custom headers without a CORS pre-flight, and the server does not emit
+// Access-Control-Allow-Origin headers, so the browser will block pre-flights
+// from foreign origins.
+func csrfProtection(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			// Safe methods — no CSRF check required.
+		default:
+			if r.Header.Get("X-Fin-Request") != "1" {
+				writeJSON(w, http.StatusForbidden, map[string]string{
+					"error": "missing X-Fin-Request header",
+				})
+				return
+			}
+		}
 		next.ServeHTTP(w, r)
 	})
 }

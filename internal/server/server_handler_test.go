@@ -220,6 +220,7 @@ func TestAPISync_NoCredentials(t *testing.T) {
 
 	h := newTestServer(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/sync", nil)
+	req.Header.Set("X-Fin-Request", "1")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -248,6 +249,7 @@ func TestAPISync_RateLimited(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/sync", nil)
+	req.Header.Set("X-Fin-Request", "1")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -327,6 +329,7 @@ func TestAPIIncomeSource_EmptyMerchant(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/income-source",
 				bytes.NewBufferString(tc.body))
 			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Fin-Request", "1")
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, req)
 
@@ -347,6 +350,7 @@ func TestAPICategoryOverride_UnknownCategory(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/category-override",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Fin-Request", "1")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -365,6 +369,7 @@ func TestAPICategoryOverride_EmptyMerchant(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/category-override",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Fin-Request", "1")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -381,6 +386,7 @@ func TestAPIIncomeSource_InvalidJSON(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/income-source",
 		bytes.NewBufferString("not json"))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Fin-Request", "1")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -477,10 +483,378 @@ func TestCacheClearRemoved(t *testing.T) {
 
 	h := newTestServer(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/cache/clear", nil)
+	req.Header.Set("X-Fin-Request", "1")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("POST /api/cache/clear: want 404 (route removed), got %d", w.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Income sources
+// ---------------------------------------------------------------------------
+
+func TestAPIIncomeSources_Empty(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/income-sources", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("GET /api/income-sources (empty): want 200, got %d", w.Code)
+	}
+
+	// Body must be a JSON array (possibly empty or null).
+	var sources []string
+	if err := json.NewDecoder(w.Body).Decode(&sources); err != nil {
+		t.Errorf("GET /api/income-sources (empty): cannot decode array: %v", err)
+	}
+	if len(sources) != 0 {
+		t.Errorf("GET /api/income-sources (empty): want empty list, got %v", sources)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Alert action
+// ---------------------------------------------------------------------------
+
+func TestAPIAlertAction_MissingKey(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"missing alert_key", `{"action":"dismiss"}`},
+		{"missing action", `{"alert_key":"some-key"}`},
+		{"both empty", `{"alert_key":"","action":""}`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodPost, "/api/alert-action",
+				bytes.NewBufferString(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Fin-Request", "1")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("POST /api/alert-action (%s): want 400, got %d; body=%s",
+					tc.name, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Transaction annotations
+// ---------------------------------------------------------------------------
+
+func TestAPIGetAnnotations_UnknownFingerprint(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/transaction/unknown123/annotations", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	// A fingerprint that does not exist still returns 200 with empty note/tags.
+	if w.Code != http.StatusOK {
+		t.Errorf("GET /api/transaction/unknown123/annotations: want 200, got %d", w.Code)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode annotations response: %v", err)
+	}
+	if _, ok := body["fingerprint"]; !ok {
+		t.Errorf("annotations response missing 'fingerprint' field; body=%v", body)
+	}
+}
+
+func TestAPISaveNote(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+	fp := "test-fingerprint-save-note"
+
+	body := `{"note":"this is my note"}`
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/transaction/"+fp+"/note",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("POST /api/transaction/%s/note: want 200, got %d; body=%s",
+			fp, w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode note save response: %v", err)
+	}
+	if resp["status"] != "ok" {
+		t.Errorf("note save: want status=ok, got %q", resp["status"])
+	}
+}
+
+func TestAPIDeleteNote(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+	fp := "test-fingerprint-delete-note"
+
+	// Delete on a non-existent note must still succeed (idempotent).
+	req := httptest.NewRequest(http.MethodDelete,
+		"/api/transaction/"+fp+"/note", nil)
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("DELETE /api/transaction/%s/note: want 200, got %d; body=%s",
+			fp, w.Code, w.Body.String())
+	}
+}
+
+func TestAPIAddTag(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+	fp := "test-fingerprint-add-tag"
+
+	body := `{"tag":"travel"}`
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/transaction/"+fp+"/tag",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("POST /api/transaction/%s/tag: want 200, got %d; body=%s",
+			fp, w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode tag add response: %v", err)
+	}
+	if resp["status"] != "ok" {
+		t.Errorf("tag add: want status=ok, got %q", resp["status"])
+	}
+}
+
+func TestAPIDeleteTag(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+	fp := "test-fingerprint-delete-tag"
+	tag := "travel"
+
+	// Delete on a non-existent tag must still succeed (idempotent).
+	req := httptest.NewRequest(http.MethodDelete,
+		"/api/transaction/"+fp+"/tag/"+tag, nil)
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("DELETE /api/transaction/%s/tag/%s: want 200, got %d; body=%s",
+			fp, tag, w.Code, w.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tags
+// ---------------------------------------------------------------------------
+
+func TestAPIGetTags_Empty(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/tags", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("GET /api/tags (empty): want 200, got %d", w.Code)
+	}
+
+	// Body must be a JSON array (possibly empty or null).
+	var tags []string
+	if err := json.NewDecoder(w.Body).Decode(&tags); err != nil {
+		t.Errorf("GET /api/tags (empty): cannot decode array: %v", err)
+	}
+	if len(tags) != 0 {
+		t.Errorf("GET /api/tags (empty): want empty list, got %v", tags)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Budget targets
+// ---------------------------------------------------------------------------
+
+func TestAPISaveBudgetTarget(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	body := `{"category_id":"dining","monthly_target_cents":50000}`
+	req := httptest.NewRequest(http.MethodPost, "/api/budget/target",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("POST /api/budget/target: want 200, got %d; body=%s",
+			w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode budget target save response: %v", err)
+	}
+	if resp["status"] != "ok" {
+		t.Errorf("budget target save: want status=ok, got %q", resp["status"])
+	}
+}
+
+func TestAPIDeleteBudgetTarget(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	// Delete on non-existent category must still succeed (idempotent).
+	req := httptest.NewRequest(http.MethodDelete, "/api/budget/target/dining", nil)
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("DELETE /api/budget/target/dining: want 200, got %d; body=%s",
+			w.Code, w.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SimpleFIN token
+// ---------------------------------------------------------------------------
+
+func TestAPISimpleFinToken_EmptyURL(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	body := `{"access_url":""}`
+	req := httptest.NewRequest(http.MethodPost, "/api/simplefin-token",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("POST /api/simplefin-token (empty URL): want 400, got %d; body=%s",
+			w.Code, w.Body.String())
+	}
+}
+
+func TestAPISimpleFinToken_NonHTTPS(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	body := `{"access_url":"http://app.simplefin.org/simplefin/token"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/simplefin-token",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("POST /api/simplefin-token (http://): want 400, got %d; body=%s",
+			w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode simplefin-token response: %v", err)
+	}
+	if resp["error"] == "" {
+		t.Errorf("POST /api/simplefin-token (http://): want error message, got empty")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Sync history
+// ---------------------------------------------------------------------------
+
+func TestAPISyncHistory_Empty(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/sync-history", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("GET /api/sync-history (empty): want 200, got %d", w.Code)
+	}
+
+	// Body must be a JSON array (possibly empty or null).
+	body := strings.TrimSpace(w.Body.String())
+	// The handler may return null or [] for an empty table -- both are valid JSON.
+	if body != "null" && !strings.HasPrefix(body, "[") {
+		t.Errorf("GET /api/sync-history (empty): want JSON array or null, got %q", body)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Category override — auto (delete override)
+// ---------------------------------------------------------------------------
+
+func TestAPICategoryOverride_Auto(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	// category_id = "auto" deletes any existing override; must return 200
+	// even if no override existed.
+	body := `{"merchant":"starbucks","category_id":"auto"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/category-override",
+		bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("POST /api/category-override (auto): want 200, got %d; body=%s",
+			w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode category-override auto response: %v", err)
+	}
+	if resp["status"] != "ok" {
+		t.Errorf("category-override auto: want status=ok, got %q", resp["status"])
 	}
 }

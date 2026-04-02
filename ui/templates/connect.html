@@ -329,7 +329,7 @@ async function postPreview(file) {
     var formData = new FormData();
     formData.append('file', file);
     try {
-        var resp = await fetch('/api/import/csv/preview', { method: 'POST', body: formData });
+        var resp = await fetch('/api/import/csv/preview', { method: 'POST', headers: { 'X-Fin-Request': '1' }, body: formData });
         var data = await resp.json();
         if (!resp.ok) {
             showCsvLoading(false);
@@ -414,7 +414,7 @@ async function confirmCsvImport() {
     if (mapping.amount)      params.set('amount_col', mapping.amount);
     if (mapping.description) params.set('description_col', mapping.description);
     try {
-        var resp = await fetch('/api/import/csv/confirm?' + params.toString(), { method: 'POST', body: formData });
+        var resp = await fetch('/api/import/csv/confirm?' + params.toString(), { method: 'POST', headers: { 'X-Fin-Request': '1' }, body: formData });
         var data = await resp.json();
         if (!resp.ok) {
             importBtn.disabled = false;
@@ -481,7 +481,7 @@ async function saveSimplefinToken() {
     try {
         var resp = await fetch('/api/simplefin-token', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Fin-Request': '1' },
             body: JSON.stringify({ access_url: token }),
         });
         var data = await resp.json();

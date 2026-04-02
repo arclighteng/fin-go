@@ -355,7 +355,7 @@ async function confirmCommitment(id, btn) {
   row.style.background = 'var(--accent-green-dim)';
   const resp = await fetch('/api/commitments/' + id, {
     method: 'PATCH',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type': 'application/json', 'X-Fin-Request': '1'},
     body: JSON.stringify({confirmed: 1})
   });
   if (!resp.ok) { btn.textContent = 'Retry'; btn.disabled = false; btn.style.opacity = '1'; return; }
@@ -372,7 +372,7 @@ function dismissCommitment(id, btn) {
   const timer = setTimeout(async () => {
     const resp = await fetch('/api/commitments/' + id, {
       method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
+      headers: {'Content-Type': 'application/json', 'X-Fin-Request': '1'},
       body: JSON.stringify({confirmed: 0, source: 'dismissed'})
     });
     if (resp.ok) {
@@ -395,7 +395,7 @@ function dismissCommitment(id, btn) {
 
 async function deleteCommitment(id) {
   if (!confirm('Delete this commitment?')) return;
-  const resp = await fetch('/api/commitments/' + id, {method: 'DELETE'});
+  const resp = await fetch('/api/commitments/' + id, {method: 'DELETE', headers: {'X-Fin-Request': '1'}});
   if (resp.ok) {
     const el = document.getElementById('row-' + id);
     if (el) el.remove();
@@ -414,7 +414,7 @@ async function restoreCommitment(id, btn) {
   btn.disabled = true;
   const resp = await fetch('/api/commitments/' + id, {
     method: 'PATCH',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type': 'application/json', 'X-Fin-Request': '1'},
     body: JSON.stringify({source: 'detected', confirmed: 0})
   });
   if (resp.ok) {
@@ -465,7 +465,7 @@ document.querySelectorAll('.editable-cadence').forEach(span => {
       select.style.opacity = '0.6';
       const resp = await fetch('/api/commitments/' + id, {
         method: 'PATCH',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json', 'X-Fin-Request': '1'},
         body: JSON.stringify({cadence: newCadence})
       });
       if (resp.ok) {
@@ -510,7 +510,7 @@ async function submitAddForm(e, direction) {
   if (dollars) data.expected_cents = Math.round(parseFloat(dollars) * 100);
   const resp = await fetch('/api/commitments', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type': 'application/json', 'X-Fin-Request': '1'},
     body: JSON.stringify(data),
   });
   if (resp.ok) location.reload();
@@ -529,7 +529,7 @@ async function dismissDuplicateGroup(merchant, groupId) {
   try {
     const resp = await fetch('/api/dismiss-duplicate', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: {'Content-Type': 'application/json', 'X-Fin-Request': '1'},
       body: JSON.stringify({ merchant: merchant, dismiss: true }),
     });
     if (resp.ok) {

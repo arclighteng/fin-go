@@ -117,7 +117,7 @@
             postJSON: async function(url, data) {
                 return fetch(url, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-Fin-Request': '1' },
                     body: JSON.stringify(data),
                 });
             }

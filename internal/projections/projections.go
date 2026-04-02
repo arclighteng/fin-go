@@ -413,21 +413,30 @@ func estimateIncome(db *sql.DB, daysForward int, accountFilter []string) (int64,
 	return 0, nil
 }
 
-func estimateFlexibleSpending(db *sql.DB, daysForward int, _ []string) (variable, discretionary int64, err error) {
+func estimateFlexibleSpending(db *sql.DB, daysForward int, accountFilter []string) (variable, discretionary int64, err error) {
 	// Rolling 3-month average for negative-amount transactions, split by
 	// a simple heuristic: merchants seen ≥4 times/month → variable,
 	// otherwise → discretionary. This is a best-effort estimate.
 	cutoff := startOfMonth(time.Now().UTC()).AddDate(0, -3, 0)
 	endMonth := startOfMonth(time.Now().UTC())
 
-	rows, err := db.Query(`
+	query := `
 		SELECT ABS(amount_cents)
 		FROM transactions
 		WHERE posted_at >= ? AND posted_at < ?
 		  AND amount_cents < 0
-		  AND COALESCE(pending, 0) = 0`,
-		cutoff.Format("2006-01-02"), endMonth.Format("2006-01-02"),
-	)
+		  AND COALESCE(pending, 0) = 0`
+	args := []any{cutoff.Format("2006-01-02"), endMonth.Format("2006-01-02")}
+
+	if len(accountFilter) > 0 {
+		placeholders := buildPlaceholders(len(accountFilter))
+		query += " AND account_id IN (" + placeholders + ")"
+		for _, id := range accountFilter {
+			args = append(args, id)
+		}
+	}
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return 0, 0, nil
 	}
@@ -666,8 +675,8 @@ type subscriptionCandidate struct {
 	isKnown     bool
 }
 
-func querySubscriptionCandidates(db *sql.DB, _ []string) ([]subscriptionCandidate, error) {
-	rows, err := db.Query(`
+func querySubscriptionCandidates(db *sql.DB, accountFilter []string) ([]subscriptionCandidate, error) {
+	query := `
 		SELECT merchant_norm,
 		       COALESCE(merchant_norm,'') AS display_name,
 		       monthly_cost_estimate_cents,
@@ -679,7 +688,18 @@ func querySubscriptionCandidates(db *sql.DB, _ []string) ([]subscriptionCandidat
 		       last_seen_at,
 		       0 AS is_known
 		FROM subscription_candidates
-		WHERE confidence >= 0.5`)
+		WHERE confidence >= 0.5`
+	var args []any
+
+	if len(accountFilter) > 0 {
+		placeholders := buildPlaceholders(len(accountFilter))
+		query += " AND account_id IN (" + placeholders + ")"
+		for _, id := range accountFilter {
+			args = append(args, id)
+		}
+	}
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("projections: query subscriptions: %w", err)
 	}
@@ -740,4 +760,20 @@ func sortChargesByDate(charges []UpcomingCharge) {
 			charges[j], charges[j-1] = charges[j-1], charges[j]
 		}
 	}
+}
+
+// buildPlaceholders returns a comma-separated string of n "?" placeholders
+// for use in SQL IN clauses, e.g. "?, ?, ?".
+func buildPlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	b := make([]byte, 0, n*3-2)
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b = append(b, ',', ' ')
+		}
+		b = append(b, '?')
+	}
+	return string(b)
 }

@@ -37,37 +37,9 @@ const (
 // ---------------------------------------------------------------------------
 // Keyword Sets
 // ---------------------------------------------------------------------------
-
-var payrollKeywords = []string{
-	"payroll", "salary", "wages", "direct dep", "direct deposit",
-	"pay from", "paycheck", "adp", "paychex", "gusto", "workday",
-	"quickbooks payroll", "zenefits",
-}
-
-var transferKeywords = []string{
-	"transfer", "xfer", "ach", "wire", "zelle", "venmo", "paypal",
-	"cash app", "cashapp", "apple cash", "square cash",
-}
-
-var bankKeywords = []string{
-	"chase", "wells fargo", "bank of america", "bofa", "citi", "citibank",
-	"capital one", "us bank", "pnc", "td bank", "ally", "discover",
-	"american express", "amex", "barclays", "synchrony",
-}
-
-var ccPaymentKeywords = []string{
-	"payment thank you", "autopay", "online payment", "payment received",
-	"credit card payment", "cc payment",
-}
-
-var refundKeywords = []string{
-	"refund", "credit", "return", "reversal", "chargeback",
-	"adjustment", "rebate", "cashback",
-}
-
-// bankDirectionWords are the words that, combined with a bank name, indicate a
-// bank-to-bank transfer. Kept separate so the logic is explicit.
-var bankDirectionWords = []string{"transfer", "to", "from"}
+//
+// Keyword lists are defined in keywords.go. This section intentionally left
+// empty to avoid duplication.
 
 // ---------------------------------------------------------------------------
 // Helper Functions
