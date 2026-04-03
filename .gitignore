@@ -1,6 +1,6 @@
 dist/
-fin
-fin.exe
+/fin
+/fin.exe
 *.db
 .env
 .env.local
