@@ -10,5 +10,5 @@ var Templates embed.FS
 
 // Static holds the ui/static/ tree (CSS, JS, images).
 //
-//go:embed static/*
+//go:embed all:static
 var Static embed.FS
