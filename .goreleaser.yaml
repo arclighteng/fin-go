@@ -31,14 +31,15 @@ builds:
 
 archives:
   - id: fin-archive
-    builds: [fin]
+    builds_ids: [fin]
+    formats:
+      - tar.gz
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
     name_template: "fin_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
-      - LICENSE
-      - README.md
+      - none*
 
 checksum:
   name_template: "fin_{{ .Version }}_checksums.txt"
