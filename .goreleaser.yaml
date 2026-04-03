@@ -31,7 +31,7 @@ builds:
 
 archives:
   - id: fin-archive
-    builds_ids: [fin]
+    ids: [fin]
     formats:
       - tar.gz
     format_overrides:
