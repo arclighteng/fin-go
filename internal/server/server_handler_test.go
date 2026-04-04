@@ -1742,3 +1742,135 @@ func TestJSONBodySizeLimit(t *testing.T) {
 		t.Errorf("POST /api/income-source (oversized body): want non-200, got 200")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Search filter tests
+// ---------------------------------------------------------------------------
+
+func TestAPISearch_DaysFilter(t *testing.T) {
+	t.Parallel()
+	h, database := newTestServerWithDB(t)
+
+	database.UpsertAccounts([]models.Account{
+		{AccountID: "acct-days", Institution: "Bank", Name: "Checking", Type: "checking", Currency: "USD"},
+	})
+	// Recent transaction (today).
+	database.UpsertTransactions([]models.Transaction{
+		{AccountID: "acct-days", PostedAt: time.Now().UTC(), AmountCents: -1000, Currency: "USD",
+			Description: "Recent Coffee", Merchant: "Coffee Shop", Fingerprint: "fp-days-1"},
+	})
+	// Old transaction (200 days ago).
+	database.UpsertTransactions([]models.Transaction{
+		{AccountID: "acct-days", PostedAt: time.Now().UTC().AddDate(0, 0, -200), AmountCents: -2000, Currency: "USD",
+			Description: "Old Coffee", Merchant: "Coffee Shop", Fingerprint: "fp-days-2"},
+	})
+
+	// days=30 should return only the recent one.
+	req := httptest.NewRequest(http.MethodGet, "/api/search?q=Coffee&days=30", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("search with days=30: want 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	matches := resp["matches"].([]any)
+	if len(matches) != 1 {
+		t.Errorf("days=30: want 1 match, got %d", len(matches))
+	}
+
+	// days=365 should return both.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/search?q=Coffee&days=365", nil)
+	w2 := httptest.NewRecorder()
+	h.ServeHTTP(w2, req2)
+
+	var resp2 map[string]any
+	json.NewDecoder(w2.Body).Decode(&resp2)
+	matches2 := resp2["matches"].([]any)
+	if len(matches2) != 2 {
+		t.Errorf("days=365: want 2 matches, got %d", len(matches2))
+	}
+}
+
+func TestAPISearch_AccountsFilter(t *testing.T) {
+	t.Parallel()
+	h, database := newTestServerWithDB(t)
+
+	database.UpsertAccounts([]models.Account{
+		{AccountID: "acct-a", Institution: "Bank A", Name: "Checking A", Type: "checking", Currency: "USD"},
+		{AccountID: "acct-b", Institution: "Bank B", Name: "Checking B", Type: "checking", Currency: "USD"},
+	})
+	database.UpsertTransactions([]models.Transaction{
+		{AccountID: "acct-a", PostedAt: time.Now().UTC(), AmountCents: -1000, Currency: "USD",
+			Description: "Grocery", Merchant: "Grocery Store", Fingerprint: "fp-acct-a"},
+		{AccountID: "acct-b", PostedAt: time.Now().UTC(), AmountCents: -2000, Currency: "USD",
+			Description: "Grocery", Merchant: "Grocery Store", Fingerprint: "fp-acct-b"},
+	})
+
+	// Filter to acct-a only.
+	req := httptest.NewRequest(http.MethodGet, "/api/search?q=Grocery&accounts=acct-a", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("search accounts=acct-a: want 200, got %d", w.Code)
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	matches := resp["matches"].([]any)
+	if len(matches) != 1 {
+		t.Errorf("accounts=acct-a: want 1 match, got %d", len(matches))
+	}
+
+	// Filter to both accounts.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/search?q=Grocery&accounts=acct-a&accounts=acct-b", nil)
+	w2 := httptest.NewRecorder()
+	h.ServeHTTP(w2, req2)
+
+	var resp2 map[string]any
+	json.NewDecoder(w2.Body).Decode(&resp2)
+	matches2 := resp2["matches"].([]any)
+	if len(matches2) != 2 {
+		t.Errorf("accounts=acct-a&accounts=acct-b: want 2 matches, got %d", len(matches2))
+	}
+
+	// Unknown account returns empty, not error.
+	req3 := httptest.NewRequest(http.MethodGet, "/api/search?q=Grocery&accounts=unknown", nil)
+	w3 := httptest.NewRecorder()
+	h.ServeHTTP(w3, req3)
+
+	if w3.Code != http.StatusOK {
+		t.Errorf("accounts=unknown: want 200, got %d", w3.Code)
+	}
+}
+
+func TestAPISearch_DaysCapped(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+
+	// days=9999 should be silently capped to 3650, not error.
+	req := httptest.NewRequest(http.MethodGet, "/api/search?q=test&days=9999", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("search days=9999: want 200, got %d", w.Code)
+	}
+}
+
+func TestAPISearch_DaysInvalid(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+
+	// Non-integer days should be ignored (no filter applied), not error.
+	req := httptest.NewRequest(http.MethodGet, "/api/search?q=test&days=abc", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("search days=abc: want 200, got %d", w.Code)
+	}
+}

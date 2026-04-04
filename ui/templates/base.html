@@ -81,14 +81,14 @@
         {{block "content" .}}{{end}}
     </div>
 
-    <div id="toast" class="toast"></div>
+    <div id="toast" class="toast" aria-live="polite" aria-atomic="true"></div>
 
     <!-- Drilldown Modal -->
-    <div id="drilldownModal" class="modal" style="display: none;">
+    <div id="drilldownModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="drilldownTitle" style="display: none;">
         <div class="modal-content drilldown-modal">
             <div class="modal-header">
                 <h3 id="drilldownTitle">Loading...</h3>
-                <button class="modal-close" onclick="finDrilldown.close()">&times;</button>
+                <button class="modal-close" onclick="finDrilldown.close()" aria-label="Close drilldown">&times;</button>
             </div>
             <div id="drilldownSummary" class="drilldown-summary-strip"></div>
             <div id="drilldownFilters" class="drilldown-filters" style="display:none;"></div>
@@ -98,11 +98,11 @@
     </div>
 
     <!-- Category Change Modal -->
-    <div id="categoryModal" class="modal" style="display: none;">
+    <div id="categoryModal" class="modal" role="dialog" aria-modal="true" aria-label="Change category" style="display: none;">
         <div class="modal-content">
             <div class="modal-header">
                 <h3>Change Category</h3>
-                <button class="modal-close" onclick="closeCategoryModal()">&times;</button>
+                <button class="modal-close" onclick="closeCategoryModal()" aria-label="Close category modal">&times;</button>
             </div>
             <div class="modal-body">
                 <p id="categoryModalMerchant" style="font-weight: 500; margin-bottom: 12px;"></p>
@@ -389,6 +389,16 @@
 
         document.getElementById('categoryModal')?.addEventListener('click', function(e) {
             if (e.target === this) closeCategoryModal();
+        });
+
+        // Close modals on Escape key.
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                var dd = document.getElementById('drilldownModal');
+                if (dd && dd.style.display !== 'none') { finDrilldown.close(); return; }
+                var cm = document.getElementById('categoryModal');
+                if (cm && cm.style.display !== 'none') { closeCategoryModal(); return; }
+            }
         });
 
         // ============================================================

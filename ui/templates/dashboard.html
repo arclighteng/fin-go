@@ -535,14 +535,15 @@
         <div class="controls-right-v3">
             {{if gt (len .AllAccounts) 1}}
             <div style="position: relative;">
-                <button class="account-toggle-v3" onclick="toggleAccounts(event)" id="accountToggle">
+                <button class="account-toggle-v3" onclick="toggleAccounts(event)" id="accountToggle"
+                        aria-expanded="false" aria-controls="accountDropdown">
                     {{if and .SelectedAccounts (lt (len .SelectedAccounts) (len .AllAccounts))}}
                         {{len .SelectedAccounts}} account{{if ne (len .SelectedAccounts) 1}}s{{end}}
                     {{else}}
                         All accounts
                     {{end}} &#9662;
                 </button>
-                <div class="account-dropdown-v3" id="accountDropdown">
+                <div class="account-dropdown-v3" id="accountDropdown" role="group" aria-label="Account filter">
                     {{range .AllAccounts}}
                     <label class="{{if $.IsAccountSelected .AccountID}}selected{{end}}">
                         <input type="checkbox" value="{{.AccountID}}"
@@ -555,7 +556,7 @@
             </div>
             {{end}}
             <div style="position: relative; flex: 1; min-width: 160px;">
-                <input type="search" id="txnSearchV3" class="search-input-v3" placeholder="Search transactions..." autocomplete="off">
+                <input type="search" id="txnSearchV3" class="search-input-v3" placeholder="Search transactions..." autocomplete="off" aria-label="Search transactions">
             </div>
         </div>
     </div>
@@ -846,7 +847,25 @@ function toggleAccounts(e) {
     var dropdown = document.getElementById('accountDropdown');
     if (!dropdown) return;
     dropdown.classList.toggle('open');
+    var isOpen = dropdown.classList.contains('open');
+    var toggle = document.getElementById('accountToggle');
+    if (toggle) toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    if (isOpen) {
+        var first = dropdown.querySelector('input');
+        if (first) first.focus();
+    }
 }
+// Close account dropdown on Escape.
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        var dropdown = document.getElementById('accountDropdown');
+        if (dropdown && dropdown.classList.contains('open')) {
+            dropdown.classList.remove('open');
+            var toggle = document.getElementById('accountToggle');
+            if (toggle) { toggle.setAttribute('aria-expanded', 'false'); toggle.focus(); }
+        }
+    }
+});
 
 function updateAccountFilter() {
     var checkboxes = document.querySelectorAll('#accountDropdown input[type="checkbox"]');

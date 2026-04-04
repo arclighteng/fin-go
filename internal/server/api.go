@@ -11,6 +11,8 @@ import (
 
 	"github.com/arclighteng/fin-go/internal/categorize"
 	"github.com/arclighteng/fin-go/internal/credentials"
+	"github.com/arclighteng/fin-go/internal/dates"
+	"github.com/arclighteng/fin-go/internal/db"
 	"github.com/arclighteng/fin-go/internal/models"
 	"github.com/go-chi/chi/v5"
 )
@@ -40,7 +42,30 @@ func (s *Server) handleAPISearch(w http.ResponseWriter, r *http.Request) {
 		limit = l
 	}
 
-	txns, err := s.db.SearchTransactions(q, limit)
+	var opts db.SearchOptions
+
+	// days filter: cap at 3650, compute min date in user's timezone.
+	if daysStr := r.URL.Query().Get("days"); daysStr != "" {
+		if d, err := strconv.Atoi(daysStr); err == nil && d > 0 {
+			if d > 3650 {
+				d = 3650
+			}
+			today := dates.Today(s.cfg.Timezone)
+			minDate := today.AddDate(0, 0, -d)
+			opts.MinDate = minDate.Format("2006-01-02")
+		}
+	}
+
+	// accounts filter: repeated query param.
+	if accts := r.URL.Query()["accounts"]; len(accts) > 0 {
+		for _, a := range accts {
+			if a = strings.TrimSpace(a); a != "" {
+				opts.Accounts = append(opts.Accounts, a)
+			}
+		}
+	}
+
+	txns, err := s.db.SearchTransactions(q, limit, opts)
 	if err != nil {
 		log.Printf("handleAPISearch: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})

@@ -14,20 +14,50 @@ type SearchResult struct {
 	AccountName string
 }
 
+// SearchOptions configures optional filters for SearchTransactions.
+type SearchOptions struct {
+	// MinDate filters results to posted_at >= this date (ISO 8601). Empty means no filter.
+	MinDate string
+	// Accounts filters results to these account IDs. Empty means all accounts.
+	Accounts []string
+}
+
 // SearchTransactions searches by merchant or description using LIKE.
 // It joins the accounts table to resolve the human-readable account name.
-func (d *DB) SearchTransactions(query string, limit int) ([]SearchResult, error) {
+func (d *DB) SearchTransactions(query string, limit int, opts SearchOptions) ([]SearchResult, error) {
 	pattern := "%" + query + "%"
+
+	var where strings.Builder
+	args := []any{pattern, pattern}
+
+	where.WriteString("(t.merchant LIKE ? OR t.description LIKE ?)")
+
+	if opts.MinDate != "" {
+		where.WriteString(" AND t.posted_at >= ?")
+		args = append(args, opts.MinDate)
+	}
+
+	if len(opts.Accounts) > 0 {
+		placeholders := make([]string, len(opts.Accounts))
+		for i, acct := range opts.Accounts {
+			placeholders[i] = "?"
+			args = append(args, acct)
+		}
+		where.WriteString(" AND t.account_id IN (" + strings.Join(placeholders, ",") + ")")
+	}
+
+	args = append(args, limit)
+
 	rows, err := d.db.Query(`
 		SELECT t.account_id, t.posted_at, t.amount_cents, t.currency, t.description, t.merchant,
 		       COALESCE(t.source_txn_id, ''), t.fingerprint, COALESCE(t.pending, 0),
 		       COALESCE(a.name, t.account_id)
 		FROM transactions t
 		LEFT JOIN accounts a ON a.account_id = t.account_id
-		WHERE t.merchant LIKE ? OR t.description LIKE ?
+		WHERE `+where.String()+`
 		ORDER BY t.posted_at DESC
 		LIMIT ?`,
-		pattern, pattern, limit,
+		args...,
 	)
 	if err != nil {
 		return nil, err
