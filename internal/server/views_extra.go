@@ -11,6 +11,7 @@ import (
 
 	"github.com/arclighteng/fin-go/internal/categorize"
 	"github.com/arclighteng/fin-go/internal/db"
+	"github.com/arclighteng/fin-go/internal/normalize"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -418,7 +419,8 @@ func handleCommitmentsView(w http.ResponseWriter, r *http.Request, database *db.
 	}
 
 	rows, err := database.Query(`
-		SELECT id, name, COALESCE(merchant_norm,''), COALESCE(expected_cents,0), cadence, confirmed, source, direction
+		SELECT id, name, COALESCE(merchant_norm,''), COALESCE(expected_cents,0), cadence,
+		       COALESCE(day_of_month,0), COALESCE(reference_date,''), confirmed, source, direction
 		FROM commitments
 		ORDER BY name
 	`)
@@ -432,21 +434,24 @@ func handleCommitmentsView(w http.ResponseWriter, r *http.Request, database *db.
 	defer rows.Close()
 
 	type rawRow struct {
-		id           int64
-		name         string
-		merchantNorm string
-		expected     int64
-		cadence      string
-		confirmed    bool
-		source       string
-		direction    string
+		id            int64
+		name          string
+		merchantNorm  string
+		expected      int64
+		cadence       string
+		dayOfMonth    int
+		referenceDate string
+		confirmed     bool
+		source        string
+		direction     string
 	}
 
 	var allRows []rawRow
 	for rows.Next() {
 		var row rawRow
 		var confirmed int
-		if err := rows.Scan(&row.id, &row.name, &row.merchantNorm, &row.expected, &row.cadence, &confirmed, &row.source, &row.direction); err != nil {
+		if err := rows.Scan(&row.id, &row.name, &row.merchantNorm, &row.expected, &row.cadence,
+			&row.dayOfMonth, &row.referenceDate, &confirmed, &row.source, &row.direction); err != nil {
 			continue
 		}
 		row.confirmed = confirmed != 0
@@ -541,6 +546,24 @@ func handleCommitmentsView(w http.ResponseWriter, r *http.Request, database *db.
 		})
 	}
 
+	// Detect not-yet-posted commitments: confirmed, non-dismissed commitments
+	// whose expected posting date has passed without a matching transaction.
+	var nypCandidates []commitmentInfo
+	for _, rr := range allRows {
+		if !rr.confirmed || rr.source == "dismissed" || rr.merchantNorm == "" {
+			continue
+		}
+		nypCandidates = append(nypCandidates, commitmentInfo{
+			merchantNorm:  rr.merchantNorm,
+			name:          rr.name,
+			cadence:       rr.cadence,
+			dayOfMonth:    rr.dayOfMonth,
+			referenceDate: rr.referenceDate,
+			expectedCents: rr.expected,
+		})
+	}
+	data.NotYetPosted = detectNotYetPosted(database, nypCandidates)
+
 	data.IncomeMonthlyTotal = incomeTotal
 	data.ExpenseMonthlyTotal = expenseTotal
 	data.NetMonthly = incomeTotal - expenseTotal
@@ -550,6 +573,153 @@ func handleCommitmentsView(w http.ResponseWriter, r *http.Request, database *db.
 	if err := tmpl.Render(w, "base", data); err != nil {
 		log.Printf("commitments render: %v", err)
 	}
+}
+
+// commitmentInfo holds the fields needed for not-yet-posted detection.
+type commitmentInfo struct {
+	merchantNorm  string
+	name          string
+	cadence       string
+	dayOfMonth    int
+	referenceDate string
+	expectedCents int64
+}
+
+// detectNotYetPosted finds confirmed commitments whose expected posting date
+// has passed without a matching transaction appearing within a ±5-day window.
+func detectNotYetPosted(database *db.DB, candidates []commitmentInfo) []NotYetPostedItem {
+	if len(candidates) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	// Fetch recent merchant dates (last 400 days) for "last seen" info.
+	recentMerchants, err := database.RecentMerchantDates(400)
+	if err != nil {
+		log.Printf("detectNotYetPosted: RecentMerchantDates: %v", err)
+		return nil
+	}
+
+	// Build normalized merchant -> last posted date map.
+	lastSeenMap := make(map[string]string)
+	for _, md := range recentMerchants {
+		norm := normalize.NormalizeMerchantPair(md.Merchant, md.Description)
+		if norm == "" {
+			continue
+		}
+		posted := md.LastPosted
+		if len(posted) >= 10 {
+			posted = posted[:10]
+		}
+		if existing, ok := lastSeenMap[norm]; !ok || posted > existing {
+			lastSeenMap[norm] = posted
+		}
+	}
+
+	// For each candidate, compute expected date and check for matching transaction.
+	var items []NotYetPostedItem
+	for _, c := range candidates {
+		expected := computeExpectedDate(c, today)
+		if expected.IsZero() || expected.After(today) {
+			continue // Not yet due or unable to compute.
+		}
+
+		// Check ±5 day window around expected date.
+		windowStart := expected.AddDate(0, 0, -5).Format("2006-01-02")
+		windowEnd := expected.AddDate(0, 0, 5).Format("2006-01-02")
+
+		windowTxns, err := database.TransactionsInWindow(windowStart, windowEnd)
+		if err != nil {
+			log.Printf("detectNotYetPosted: TransactionsInWindow(%s): %v", c.merchantNorm, err)
+			continue
+		}
+		found := false
+		for _, wt := range windowTxns {
+			if normalize.NormalizeMerchantPair(wt.Merchant, wt.Description) == c.merchantNorm {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+
+		lastSeen := lastSeenMap[c.merchantNorm]
+		if lastSeen == "" {
+			lastSeen = "Never"
+		}
+
+		items = append(items, NotYetPostedItem{
+			Merchant:          c.name,
+			Cadence:           c.cadence,
+			MedianAmountCents: c.expectedCents,
+			LastSeen:          lastSeen,
+			ExpectedDate:      expected.Format("Jan 2"),
+		})
+	}
+
+	return items
+}
+
+// computeExpectedDate returns the most recent expected posting date for a commitment
+// based on its cadence. Only handles monthly cadence for now (covers the vast majority).
+func computeExpectedDate(c commitmentInfo, today time.Time) time.Time {
+	y, m, _ := today.Date()
+
+	switch c.cadence {
+	case "monthly":
+		dom := c.dayOfMonth
+		if dom <= 0 {
+			dom = 1
+		}
+		// Clamp to last day of current month.
+		lastDay := time.Date(y, m+1, 0, 0, 0, 0, 0, time.UTC).Day()
+		if dom > lastDay {
+			dom = lastDay
+		}
+		return time.Date(y, m, dom, 0, 0, 0, 0, time.UTC)
+
+	case "annual", "yearly":
+		if c.referenceDate == "" {
+			return time.Time{}
+		}
+		ref, err := time.Parse("2006-01-02", c.referenceDate)
+		if err != nil {
+			return time.Time{}
+		}
+		// Use reference month+day in current year.
+		expected := time.Date(y, ref.Month(), ref.Day(), 0, 0, 0, 0, time.UTC)
+		if expected.After(today) {
+			// Not due yet this year.
+			return time.Time{}
+		}
+		return expected
+
+	case "quarterly":
+		if c.referenceDate == "" {
+			return time.Time{}
+		}
+		ref, err := time.Parse("2006-01-02", c.referenceDate)
+		if err != nil {
+			return time.Time{}
+		}
+		// Advance reference date by 3-month intervals until most recent past date.
+		candidate := ref
+		for candidate.Before(today) {
+			next := candidate.AddDate(0, 3, 0)
+			if next.After(today) {
+				break
+			}
+			candidate = next
+		}
+		if candidate.After(today) {
+			return time.Time{}
+		}
+		return candidate
+	}
+
+	return time.Time{} // Unknown cadence (weekly, biweekly — not yet supported).
 }
 
 // -----------------------------------------------------------------------------

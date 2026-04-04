@@ -2013,3 +2013,88 @@ func TestAPIDrilldown_UnknownScope(t *testing.T) {
 		t.Errorf("drilldown unknown scope: want 400, got %d", w.Code)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// NotYetPosted detection
+// ---------------------------------------------------------------------------
+
+func TestCommitments_NotYetPosted_ShowsMissing(t *testing.T) {
+	t.Parallel()
+	h, database := newTestServerWithDB(t)
+
+	// Create a confirmed monthly commitment for "netflix" expected on the 1st.
+	dom := 1
+	cents := int64(1599)
+	database.SaveCommitment(models.Commitment{
+		Name:          "Netflix",
+		MerchantNorm:  "netflix",
+		ExpectedCents: &cents,
+		Cadence:       "monthly",
+		DayOfMonth:    &dom,
+		Confirmed:     true,
+		Source:        "manual",
+		Direction:     "expense",
+	})
+
+	// Seed an account but NO matching transaction for netflix this month.
+	database.UpsertAccounts([]models.Account{
+		{AccountID: "acct1", Institution: "Bank", Name: "Checking", Type: "checking", Currency: "USD"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/commitments", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /commitments: want 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "Not Yet Posted") {
+		t.Error("expected 'Not Yet Posted' section when commitment has no matching transaction")
+	}
+	if !strings.Contains(body, "Netflix") {
+		t.Error("expected Netflix to appear in Not Yet Posted section")
+	}
+}
+
+func TestCommitments_NotYetPosted_HiddenWhenMatched(t *testing.T) {
+	t.Parallel()
+	h, database := newTestServerWithDB(t)
+
+	now := time.Now().UTC()
+	dom := now.Day()
+	cents := int64(1599)
+	database.SaveCommitment(models.Commitment{
+		Name:          "Netflix",
+		MerchantNorm:  "netflix",
+		ExpectedCents: &cents,
+		Cadence:       "monthly",
+		DayOfMonth:    &dom,
+		Confirmed:     true,
+		Source:        "manual",
+		Direction:     "expense",
+	})
+
+	// Seed a matching transaction for netflix posted today.
+	database.UpsertAccounts([]models.Account{
+		{AccountID: "acct1", Institution: "Bank", Name: "Checking", Type: "checking", Currency: "USD"},
+	})
+	database.UpsertTransactions([]models.Transaction{
+		{AccountID: "acct1", PostedAt: now, AmountCents: -1599, Currency: "USD",
+			Description: "NETFLIX.COM", Merchant: "Netflix", Fingerprint: "fp-netflix"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/commitments", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /commitments: want 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if strings.Contains(body, "Not Yet Posted") {
+		t.Error("should NOT show 'Not Yet Posted' when matching transaction exists")
+	}
+}

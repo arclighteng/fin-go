@@ -475,6 +475,62 @@ func (d *DB) DeleteCommitment(id int64) error {
 	return err
 }
 
+// RecentMerchantDates returns raw (merchant, description, max_posted_at) tuples
+// for transactions posted within the last N days. The caller is responsible for
+// normalizing merchant names and matching against commitment merchant_norms.
+func (d *DB) RecentMerchantDates(lookbackDays int) ([]MerchantDate, error) {
+	cutoff := time.Now().UTC().AddDate(0, 0, -lookbackDays).Format("2006-01-02")
+	rows, err := d.db.Query(`
+		SELECT merchant, description, MAX(posted_at) as last_posted
+		FROM transactions
+		WHERE posted_at >= ?
+		GROUP BY LOWER(TRIM(COALESCE(merchant,'')))`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []MerchantDate
+	for rows.Next() {
+		var md MerchantDate
+		if err := rows.Scan(&md.Merchant, &md.Description, &md.LastPosted); err != nil {
+			continue
+		}
+		results = append(results, md)
+	}
+	return results, rows.Err()
+}
+
+// MerchantDate holds a merchant's most recent posting date.
+type MerchantDate struct {
+	Merchant    string
+	Description string
+	LastPosted  string // ISO date or datetime
+}
+
+// TransactionsInWindow returns raw (merchant, description, posted_at) for all
+// transactions posted within [startISO, endISO] inclusive.
+func (d *DB) TransactionsInWindow(startISO, endISO string) ([]MerchantDate, error) {
+	rows, err := d.db.Query(`
+		SELECT merchant, description, posted_at
+		FROM transactions
+		WHERE posted_at >= ? AND posted_at <= ?`, startISO, endISO)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []MerchantDate
+	for rows.Next() {
+		var md MerchantDate
+		if err := rows.Scan(&md.Merchant, &md.Description, &md.LastPosted); err != nil {
+			continue
+		}
+		results = append(results, md)
+	}
+	return results, rows.Err()
+}
+
 // DismissDuplicateGroup marks all commitments matching a merchant_norm as dismissed.
 func (d *DB) DismissDuplicateGroup(merchantNorm string) error {
 	_, err := d.db.Exec(`
