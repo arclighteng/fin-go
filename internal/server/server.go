@@ -70,6 +70,7 @@ func New(database *db.DB, cfg *config.Config, version string) http.Handler {
 		r.Get("/sync-history", s.handleAPISyncHistory)
 		r.Get("/categories", s.handleAPICategories)
 		r.Get("/search", s.handleAPISearch)
+		r.Get("/drilldown", s.handleAPIDrilldown)
 
 		// Income sources
 		r.Post("/income-source", s.handleAPIIncomeSource)

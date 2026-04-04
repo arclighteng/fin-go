@@ -1874,3 +1874,142 @@ func TestAPISearch_DaysInvalid(t *testing.T) {
 		t.Errorf("search days=abc: want 200, got %d", w.Code)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Drilldown API tests
+// ---------------------------------------------------------------------------
+
+func TestAPIDrilldown_MissingScope(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/drilldown?start_date=2026-01-01&end_date=2026-02-01", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("drilldown missing scope: want 400, got %d", w.Code)
+	}
+}
+
+func TestAPIDrilldown_MissingDates(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/drilldown?scope=income", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("drilldown missing dates: want 400, got %d", w.Code)
+	}
+}
+
+func TestAPIDrilldown_Income(t *testing.T) {
+	t.Parallel()
+	h, database := newTestServerWithDB(t)
+
+	database.UpsertAccounts([]models.Account{
+		{AccountID: "acct-dd", Institution: "Bank", Name: "Checking", Type: "checking", Currency: "USD"},
+	})
+	database.UpsertTransactions([]models.Transaction{
+		{AccountID: "acct-dd", PostedAt: time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
+			AmountCents: 250000, Currency: "USD", Description: "EMPLOYER", Merchant: "EMPLOYER", Fingerprint: "fp-dd-inc"},
+		{AccountID: "acct-dd", PostedAt: time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
+			AmountCents: -5000, Currency: "USD", Description: "Coffee", Merchant: "Coffee", Fingerprint: "fp-dd-exp"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/drilldown?scope=income&start_date=2026-01-01&end_date=2026-02-01", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("drilldown income: want 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+
+	if resp["title"] != "Income" {
+		t.Errorf("title: want Income, got %v", resp["title"])
+	}
+	txns := resp["transactions"].([]any)
+	if len(txns) != 1 {
+		t.Errorf("income transactions: want 1, got %d", len(txns))
+	}
+}
+
+func TestAPIDrilldown_Spend(t *testing.T) {
+	t.Parallel()
+	h, database := newTestServerWithDB(t)
+
+	database.UpsertAccounts([]models.Account{
+		{AccountID: "acct-dd2", Institution: "Bank", Name: "Checking", Type: "checking", Currency: "USD"},
+	})
+	database.UpsertTransactions([]models.Transaction{
+		{AccountID: "acct-dd2", PostedAt: time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
+			AmountCents: 250000, Currency: "USD", Description: "EMPLOYER", Merchant: "EMPLOYER", Fingerprint: "fp-dd2-inc"},
+		{AccountID: "acct-dd2", PostedAt: time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
+			AmountCents: -5000, Currency: "USD", Description: "Coffee", Merchant: "Coffee", Fingerprint: "fp-dd2-exp"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/drilldown?scope=spend&start_date=2026-01-01&end_date=2026-02-01", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("drilldown spend: want 200, got %d", w.Code)
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	txns := resp["transactions"].([]any)
+	if len(txns) != 1 {
+		t.Errorf("spend transactions: want 1, got %d", len(txns))
+	}
+}
+
+func TestAPIDrilldown_Merchant(t *testing.T) {
+	t.Parallel()
+	h, database := newTestServerWithDB(t)
+
+	database.UpsertAccounts([]models.Account{
+		{AccountID: "acct-dd3", Institution: "Bank", Name: "Checking", Type: "checking", Currency: "USD"},
+	})
+	database.UpsertTransactions([]models.Transaction{
+		{AccountID: "acct-dd3", PostedAt: time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC),
+			AmountCents: -3000, Currency: "USD", Description: "STARBUCKS #123", Merchant: "Starbucks", Fingerprint: "fp-dd3-1"},
+		{AccountID: "acct-dd3", PostedAt: time.Date(2026, 1, 12, 0, 0, 0, 0, time.UTC),
+			AmountCents: -3500, Currency: "USD", Description: "STARBUCKS #456", Merchant: "Starbucks", Fingerprint: "fp-dd3-2"},
+		{AccountID: "acct-dd3", PostedAt: time.Date(2026, 1, 12, 0, 0, 0, 0, time.UTC),
+			AmountCents: -8000, Currency: "USD", Description: "WHOLE FOODS", Merchant: "Whole Foods", Fingerprint: "fp-dd3-3"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/drilldown?scope=merchant:starbucks&start_date=2026-01-01&end_date=2026-02-01", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("drilldown merchant: want 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	txns := resp["transactions"].([]any)
+	if len(txns) != 2 {
+		t.Errorf("merchant:starbucks transactions: want 2, got %d", len(txns))
+	}
+}
+
+func TestAPIDrilldown_UnknownScope(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/drilldown?scope=bogus&start_date=2026-01-01&end_date=2026-02-01", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("drilldown unknown scope: want 400, got %d", w.Code)
+	}
+}

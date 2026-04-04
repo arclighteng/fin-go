@@ -82,6 +82,41 @@ func (d *DB) SearchTransactions(query string, limit int, opts SearchOptions) ([]
 }
 
 // SaveIncomeSource marks a merchant as income or not-income.
+// GetTransactionsWithAccounts returns transactions in a date range with resolved
+// account names, ordered by posted_at DESC.
+func (d *DB) GetTransactionsWithAccounts(startISO, endISO string) ([]SearchResult, error) {
+	rows, err := d.db.Query(`
+		SELECT t.account_id, t.posted_at, t.amount_cents, t.currency, t.description, t.merchant,
+		       COALESCE(t.source_txn_id, ''), t.fingerprint, COALESCE(t.pending, 0),
+		       COALESCE(a.name, t.account_id)
+		FROM transactions t
+		LEFT JOIN accounts a ON a.account_id = t.account_id
+		WHERE t.posted_at >= ? AND t.posted_at < ?
+		ORDER BY t.posted_at DESC`,
+		startISO, endISO,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []SearchResult
+	for rows.Next() {
+		var sr SearchResult
+		var dateStr string
+		if err := rows.Scan(
+			&sr.AccountID, &dateStr, &sr.AmountCents, &sr.Currency,
+			&sr.Description, &sr.Merchant, &sr.SourceTxnID, &sr.Fingerprint,
+			&sr.Pending, &sr.AccountName,
+		); err != nil {
+			return nil, err
+		}
+		sr.PostedAt, _ = time.Parse("2006-01-02", dateStr)
+		results = append(results, sr)
+	}
+	return results, rows.Err()
+}
+
 func (d *DB) SaveIncomeSource(merchant string, isIncome bool) error {
 	ruleType := "income"
 	if !isIncome {
