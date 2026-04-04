@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
 	"html/template"
 	"io/fs"
+	"log"
 	"math"
 	"net/http"
 	"strings"
@@ -32,12 +34,17 @@ func NewTemplateEngineFS(fsys fs.FS, version string) (*TemplateEngine, error) {
 }
 
 // Render writes the named template to w with the given data.
-// On error it writes a 500 response; callers should not write to w afterward.
+// Output is buffered so that a mid-render template error produces a clean 500
+// instead of a partial HTML page.
 func (e *TemplateEngine) Render(w http.ResponseWriter, name string, data any) error {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := e.tmpl.ExecuteTemplate(w, name, data); err != nil {
-		// Header already sent, just log — the partial response is broken.
+	var buf bytes.Buffer
+	if err := e.tmpl.ExecuteTemplate(&buf, name, data); err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return fmt.Errorf("render template %q: %w", name, err)
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if _, err := buf.WriteTo(w); err != nil {
+		log.Printf("render template %q: write: %v", name, err)
 	}
 	return nil
 }
@@ -63,14 +70,42 @@ func templateFuncs() template.FuncMap {
 		// neg negates an int64.
 		"neg": func(n int64) int64 { return -n },
 
-		// add adds two int64 values.
-		"add": func(a, b int64) int64 { return a + b },
+		// add adds two numeric values (int, int64, or float64).
+		"add": func(a, b any) any {
+			ai, aInt := toInt64(a)
+			bi, bInt := toInt64(b)
+			if aInt && bInt {
+				return ai + bi
+			}
+			af, _ := toFloat(a)
+			bf, _ := toFloat(b)
+			return af + bf
+		},
 
-		// sub subtracts b from a.
-		"sub": func(a, b int64) int64 { return a - b },
+		// sub subtracts b from a (int, int64, or float64).
+		"sub": func(a, b any) any {
+			ai, aInt := toInt64(a)
+			bi, bInt := toInt64(b)
+			if aInt && bInt {
+				return ai - bi
+			}
+			af, _ := toFloat(a)
+			bf, _ := toFloat(b)
+			return af - bf
+		},
 
-		// mul multiplies two int64 values.
-		"mul": func(a, b int64) int64 { return a * b },
+		// mul multiplies two numeric values. Accepts int64 or float64 and
+		// returns float64 when either operand is float64.
+		"mul": func(a, b any) any {
+			ai, aInt := toInt64(a)
+			bi, bInt := toInt64(b)
+			if aInt && bInt {
+				return ai * bi
+			}
+			af, _ := toFloat(a)
+			bf, _ := toFloat(b)
+			return af * bf
+		},
 
 		// div100 divides a by b and returns a float64 (safe: returns 0 if b==0).
 		"div100": func(a, b int64) float64 {
@@ -221,9 +256,21 @@ func absInt(n int64) int64 {
 }
 
 // templateSlice provides a type-safe slice helper for the concrete types used
-// in templates. It handles []CategoryItem and []PeriodSummary.
+// in templates. It handles strings, []CategoryItem, and []PeriodSummary.
 func templateSlice(v any, lo, hi int) any {
 	switch s := v.(type) {
+	case string:
+		runes := []rune(s)
+		if lo < 0 {
+			lo = 0
+		}
+		if hi > len(runes) {
+			hi = len(runes)
+		}
+		if lo > hi {
+			return ""
+		}
+		return string(runes[lo:hi])
 	case []CategoryItem:
 		if lo < 0 {
 			lo = 0
@@ -246,18 +293,34 @@ func templateSlice(v any, lo, hi int) any {
 			return []PeriodSummary{}
 		}
 		return s[lo:hi]
-	case []AttentionItem:
-		if lo < 0 {
-			lo = 0
-		}
-		if hi > len(s) {
-			hi = len(s)
-		}
-		if lo > hi {
-			return []AttentionItem{}
-		}
-		return s[lo:hi]
 	default:
 		return v
+	}
+}
+
+// toInt64 converts an int or int64 to int64. Returns false for float64.
+func toInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	default:
+		return 0, false
+	}
+}
+
+// toFloat converts an int64, int, or float64 to float64, returning whether the
+// original was already a float.
+func toFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int64:
+		return float64(n), false
+	case int:
+		return float64(n), false
+	default:
+		return 0, false
 	}
 }

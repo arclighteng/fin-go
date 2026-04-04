@@ -64,20 +64,6 @@ type CategoryItem struct {
 	Count        int
 }
 
-// AttentionItem is a single "Heads Up" card entry.
-type AttentionItem struct {
-	Type           string
-	Title          string
-	Detail         string
-	Severity       string
-	ActionType     string
-	Key            string
-	Actioned       bool
-	DrilldownScope string
-	Link           string
-	LinkLabel      string
-}
-
 // DashboardData is the complete view model for the dashboard template.
 type DashboardData struct {
 	BaseData
@@ -91,7 +77,6 @@ type DashboardData struct {
 	SelectedAccounts []string
 
 	CategoryBreakdown []CategoryItem
-	AttentionItems    []AttentionItem
 
 	SavingsRatePct    float64
 	AvgSavingsRatePct float64
@@ -105,7 +90,7 @@ type DashboardData struct {
 
 // IsAccountSelected returns true when accountID is in the selected set, or
 // when no explicit selection is active (all accounts shown).
-func (d *DashboardData) IsAccountSelected(accountID string) bool {
+func (d DashboardData) IsAccountSelected(accountID string) bool {
 	if len(d.SelectedAccounts) == 0 {
 		return true
 	}
@@ -231,6 +216,27 @@ func handleDashboardView(w http.ResponseWriter, r *http.Request, database *db.DB
 		periodType = "this_month"
 	}
 
+	// When the user lands on the default period with no explicit date params,
+	// check whether the current month actually has data. If not, redirect to
+	// the month containing the most recent transaction so the dashboard isn't
+	// blank. This handles the common case of importing old bank statements.
+	if q.Get("start_date") == "" && q.Get("end_date") == "" && periodType == "this_month" {
+		startISO, endISO := thisMonthRange()
+		if isEmpty := periodHasNoTransactions(database, startISO, endISO); isEmpty {
+			if newest, err := database.NewestTransaction(); err == nil && !newest.IsZero() {
+				ny, nm, _ := newest.Date()
+				now := time.Now().UTC()
+				if ny != now.Year() || nm != now.Month() {
+					start := fmt.Sprintf("%04d-%02d-01", ny, nm)
+					end := time.Date(ny, nm+1, 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+					target := "/dashboard?start_date=" + start + "&end_date=" + end
+					http.Redirect(w, r, target, http.StatusFound)
+					return
+				}
+			}
+		}
+	}
+
 	// Parse account filter.
 	accountsParam := q.Get("accounts")
 	var selectedAccounts []string
@@ -252,7 +258,20 @@ func handleDashboardView(w http.ResponseWriter, r *http.Request, database *db.DB
 	}
 
 	if !showNoData {
-		populateDashboard(database, r, &data, periodType)
+		// Resolve the date range once, then pass it to populateDashboard.
+		startStr := q.Get("start_date")
+		endStr := q.Get("end_date")
+		var startISO, endISO string
+		switch {
+		case startStr != "" && endStr != "":
+			startISO = startStr
+			endISO = endStr
+		case periodType == "last_month":
+			startISO, endISO = lastMonthRange()
+		default:
+			startISO, endISO = thisMonthRange()
+		}
+		populateDashboard(database, startISO, endISO, &data)
 	}
 
 	if err := tmpl.Render(w, "base", data); err != nil {
@@ -261,22 +280,8 @@ func handleDashboardView(w http.ResponseWriter, r *http.Request, database *db.DB
 }
 
 // populateDashboard fills period-dependent fields of DashboardData.
-func populateDashboard(database *db.DB, r *http.Request, data *DashboardData, periodType string) {
-	q := r.URL.Query()
-	startStr := q.Get("start_date")
-	endStr := q.Get("end_date")
-
-	var startISO, endISO string
-	switch {
-	case startStr != "" && endStr != "":
-		startISO = startStr
-		endISO = endStr
-	case periodType == "last_month":
-		startISO, endISO = lastMonthRange()
-	default:
-		startISO, endISO = thisMonthRange()
-	}
-
+// The caller resolves the date range and passes it directly.
+func populateDashboard(database *db.DB, startISO, endISO string, data *DashboardData) {
 	if startISO == "" {
 		return
 	}
@@ -610,6 +615,18 @@ func scanRecentTxns(rows interface {
 	return out
 }
 
+// periodHasNoTransactions returns true when no transactions exist in [start, end).
+func periodHasNoTransactions(database *db.DB, startISO, endISO string) bool {
+	var count int
+	if err := database.QueryRow(
+		"SELECT COUNT(*) FROM transactions WHERE posted_at >= ? AND posted_at < ?",
+		startISO, endISO,
+	).Scan(&count); err != nil {
+		return false // on error, don't redirect
+	}
+	return count == 0
+}
+
 // -----------------------------------------------------------------------------
 // Date / period helpers
 // -----------------------------------------------------------------------------
@@ -696,14 +713,6 @@ func titleCase(s string) string {
 		}
 	}
 	return strings.Join(parts, " ")
-}
-
-// currentYMD is a thin shim so templates.go can call a date helper without
-// importing time itself. It returns [year, month, day] for today.
-func currentYMD() [3]int {
-	now := time.Now()
-	y, m, d := now.Date()
-	return [3]int{y, int(m), d}
 }
 
 

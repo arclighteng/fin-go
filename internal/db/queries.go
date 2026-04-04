@@ -8,15 +8,24 @@ import (
 	"github.com/arclighteng/fin-go/internal/models"
 )
 
+// SearchResult holds a transaction plus its resolved account name.
+type SearchResult struct {
+	models.Transaction
+	AccountName string
+}
+
 // SearchTransactions searches by merchant or description using LIKE.
-func (d *DB) SearchTransactions(query string, limit int) ([]models.Transaction, error) {
+// It joins the accounts table to resolve the human-readable account name.
+func (d *DB) SearchTransactions(query string, limit int) ([]SearchResult, error) {
 	pattern := "%" + query + "%"
 	rows, err := d.db.Query(`
-		SELECT account_id, posted_at, amount_cents, currency, description, merchant,
-		       source_txn_id, fingerprint, COALESCE(pending, 0)
-		FROM transactions
-		WHERE merchant LIKE ? OR description LIKE ?
-		ORDER BY posted_at DESC
+		SELECT t.account_id, t.posted_at, t.amount_cents, t.currency, t.description, t.merchant,
+		       COALESCE(t.source_txn_id, ''), t.fingerprint, COALESCE(t.pending, 0),
+		       COALESCE(a.name, t.account_id)
+		FROM transactions t
+		LEFT JOIN accounts a ON a.account_id = t.account_id
+		WHERE t.merchant LIKE ? OR t.description LIKE ?
+		ORDER BY t.posted_at DESC
 		LIMIT ?`,
 		pattern, pattern, limit,
 	)
@@ -24,7 +33,22 @@ func (d *DB) SearchTransactions(query string, limit int) ([]models.Transaction, 
 		return nil, err
 	}
 	defer rows.Close()
-	return scanTransactions(rows)
+
+	var results []SearchResult
+	for rows.Next() {
+		var sr SearchResult
+		var dateStr string
+		if err := rows.Scan(
+			&sr.AccountID, &dateStr, &sr.AmountCents, &sr.Currency,
+			&sr.Description, &sr.Merchant, &sr.SourceTxnID, &sr.Fingerprint,
+			&sr.Pending, &sr.AccountName,
+		); err != nil {
+			return nil, err
+		}
+		sr.PostedAt, _ = time.Parse("2006-01-02", dateStr)
+		results = append(results, sr)
+	}
+	return results, rows.Err()
 }
 
 // SaveIncomeSource marks a merchant as income or not-income.
@@ -291,4 +315,107 @@ func (d *DB) OldestTransaction() (time.Time, error) {
 		return time.Time{}, err
 	}
 	return time.Parse("2006-01-02", dateStr.String)
+}
+
+// NewestTransaction returns the most recent transaction date.
+func (d *DB) NewestTransaction() (time.Time, error) {
+	var dateStr sql.NullString
+	err := d.db.QueryRow("SELECT MAX(posted_at) FROM transactions").Scan(&dateStr)
+	if err != nil || !dateStr.Valid {
+		return time.Time{}, err
+	}
+	return time.Parse("2006-01-02", dateStr.String)
+}
+
+// -----------------------------------------------------------------------------
+// Commitments
+// -----------------------------------------------------------------------------
+
+// GetCommitments returns all commitments.
+func (d *DB) GetCommitments() ([]models.Commitment, error) {
+	rows, err := d.db.Query(`
+		SELECT id, name, COALESCE(merchant_norm,''), expected_cents, cadence,
+		       day_of_month, COALESCE(reference_date,''), confirmed, source, direction
+		FROM commitments
+		ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []models.Commitment
+	for rows.Next() {
+		var c models.Commitment
+		if err := rows.Scan(&c.ID, &c.Name, &c.MerchantNorm, &c.ExpectedCents,
+			&c.Cadence, &c.DayOfMonth, &c.ReferenceDate, &c.Confirmed, &c.Source, &c.Direction); err != nil {
+			return nil, err
+		}
+		result = append(result, c)
+	}
+	return result, rows.Err()
+}
+
+// SaveCommitment inserts a new commitment and returns its ID.
+func (d *DB) SaveCommitment(c models.Commitment) (int64, error) {
+	now := utcNowISO()
+	res, err := d.db.Exec(`
+		INSERT INTO commitments(name, merchant_norm, expected_cents, cadence, day_of_month,
+		                        reference_date, confirmed, source, direction, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.Name, c.MerchantNorm, c.ExpectedCents, c.Cadence, c.DayOfMonth,
+		c.ReferenceDate, c.Confirmed, c.Source, c.Direction, now, now,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// UpdateCommitment applies partial updates to a commitment by ID.
+// Only non-nil fields in the map are updated.
+func (d *DB) UpdateCommitment(id int64, fields map[string]any) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	// Whitelist of allowed columns to prevent injection.
+	allowed := map[string]bool{
+		"confirmed": true, "source": true, "cadence": true,
+		"name": true, "expected_cents": true, "direction": true,
+		"day_of_month": true, "reference_date": true, "merchant_norm": true,
+	}
+	var setClauses []string
+	var args []any
+	for col, val := range fields {
+		if !allowed[col] {
+			continue
+		}
+		setClauses = append(setClauses, col+" = ?")
+		args = append(args, val)
+	}
+	if len(setClauses) == 0 {
+		return nil
+	}
+	setClauses = append(setClauses, "updated_at = ?")
+	args = append(args, utcNowISO())
+	args = append(args, id)
+
+	query := "UPDATE commitments SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
+	_, err := d.db.Exec(query, args...)
+	return err
+}
+
+// DeleteCommitment removes a commitment by ID.
+func (d *DB) DeleteCommitment(id int64) error {
+	_, err := d.db.Exec("DELETE FROM commitments WHERE id = ?", id)
+	return err
+}
+
+// DismissDuplicateGroup marks all commitments matching a merchant_norm as dismissed.
+func (d *DB) DismissDuplicateGroup(merchantNorm string) error {
+	_, err := d.db.Exec(`
+		UPDATE commitments SET source = 'dismissed', updated_at = ?
+		WHERE merchant_norm = ? AND source != 'dismissed'`,
+		utcNowISO(), merchantNorm,
+	)
+	return err
 }

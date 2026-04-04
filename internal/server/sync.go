@@ -98,10 +98,8 @@ func (s *Server) handleAPISync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"accounts_synced":       len(result.Accounts),
-		"transactions_fetched":  len(result.Transactions),
-		"transactions_inserted": inserted,
-		"transactions_updated":  updated,
-		"syncs_today":           count + 1,
+		"fetched":  len(result.Transactions),
+		"inserted": inserted,
+		"updated":  updated,
 	})
 }

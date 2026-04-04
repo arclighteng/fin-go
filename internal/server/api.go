@@ -46,7 +46,20 @@ func (s *Server) handleAPISearch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
-	writeJSON(w, http.StatusOK, txns)
+
+	// Map to the shape the frontend expects: {matches: [{date, amount_cents, merchant, description, account_name}]}
+	matches := make([]map[string]any, 0, len(txns))
+	for _, t := range txns {
+		matches = append(matches, map[string]any{
+			"date":         t.PostedAt.Format("2006-01-02"),
+			"amount_cents": t.AmountCents,
+			"merchant":     t.Merchant,
+			"description":  t.Description,
+			"account_name": t.AccountName,
+			"fingerprint":  t.Fingerprint,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"matches": matches})
 }
 
 func (s *Server) handleAPIIncomeSource(w http.ResponseWriter, r *http.Request) {
@@ -210,6 +223,10 @@ func (s *Server) handleAPIAddTag(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIDeleteTag(w http.ResponseWriter, r *http.Request) {
 	fp := chi.URLParam(r, "fingerprint")
 	tag := chi.URLParam(r, "tag")
+	if tag == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tag is required"})
+		return
+	}
 	if err := s.db.DeleteTransactionTag(fp, tag); err != nil {
 		log.Printf("handleAPIDeleteTag: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})

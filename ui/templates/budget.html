@@ -507,7 +507,7 @@ document.querySelectorAll('.budget-row').forEach(row => {
     if (pctCell && pctCell.textContent.trim() !== '--') {
         const actions = document.createElement('div');
         actions.className = 'budget-row-actions';
-        actions.innerHTML = '<button class="btn-icon delete" onclick="event.stopPropagation(); deleteBudgetTarget(\'' + catId + '\')" title="Remove target" aria-label="Remove budget target">&#10005;</button>';
+        actions.innerHTML = '<button class="btn-icon delete" onclick="event.stopPropagation(); deleteBudgetTarget(\'' + finUI.escapeHtml(catId) + '\')" title="Remove target" aria-label="Remove budget target">&#10005;</button>';
         row.appendChild(actions);
         row.style.gridTemplateColumns = '200px 1fr 120px 80px 40px';
     }

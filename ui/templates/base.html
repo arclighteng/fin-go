@@ -5,10 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{block "title" .}}Fin{{end}}</title>
     <link rel="stylesheet" href="/static/css/app.css">
-    <!-- Chart.js for visualizations -->
-    <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
-            integrity="sha384-6DXHkyvIEkiD08Op4DD1tCYBPlcEYPo+ReZsJfqWnhBSFhJPpMDQ/hMkunxJIjig"
-            crossorigin="anonymous"></script>
+    <!-- Chart.js for visualizations (vendored locally to avoid CDN/SRI drift) -->
+    <script defer src="/static/js/chart.umd.min.js"></script>
 </head>
 <body>
     <script>
@@ -22,9 +20,13 @@
     </script>
     <a href="#main-content" class="skip-link">Skip to main content</a>
     <nav class="nav">
-        <a href="/" class="nav-brand">Fin <span class="nav-version">Beta {{.AppVersion}}</span></a>
+        <a href="/" class="nav-brand">Fin <span class="nav-version">Go Beta {{.AppVersion}}</span></a>
         <div class="nav-links">
             <a href="/dashboard"{{if eq .ActiveNav "dashboard"}} class="active"{{end}}>Dashboard</a>
+            <a href="/budget"{{if eq .ActiveNav "budget"}} class="active"{{end}}>Budget</a>
+            <a href="/commitments"{{if eq .ActiveNav "commitments"}} class="active"{{end}}>Commitments</a>
+            <a href="/insights"{{if eq .ActiveNav "insights"}} class="active"{{end}}>Insights</a>
+            <a href="/review"{{if eq .ActiveNav "review"}} class="active"{{end}}>Review</a>
             <a href="/connect"{{if eq .ActiveNav "connect"}} class="active"{{end}}>Connect</a>
             <a href="/sync-log"{{if eq .ActiveNav "sync-log"}} class="active"{{end}}>Sync Log</a>
         </div>
@@ -205,10 +207,10 @@
                         var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
                         return months[d.getMonth()] + " '" + String(d.getFullYear()).slice(2);
                     };
-                    dataInfo = '<br><span class="sync-range">Data: ' + formatDate(data.data_range.earliest) + ' \u2013 ' + formatDate(data.data_range.latest) + '</span>';
+                    dataInfo = '<br><span class="sync-range">Data: ' + finUI.escapeHtml(formatDate(data.data_range.earliest)) + ' \u2013 ' + finUI.escapeHtml(formatDate(data.data_range.latest)) + '</span>';
                 }
 
-                statusEl.innerHTML = '<span class="sync-time">Synced: ' + timeAgo + '</span>' + dataInfo;
+                statusEl.innerHTML = '<span class="sync-time">Synced: ' + finUI.escapeHtml(timeAgo) + '</span>' + dataInfo;
             } catch (err) {
                 statusEl.innerHTML = '';
             }

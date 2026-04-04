@@ -208,7 +208,7 @@ type ReviewData struct {
 
 // IsAccountSelected returns true when accountID is selected or when no filter
 // is active.
-func (d *ReviewData) IsAccountSelected(accountID string) bool {
+func (d ReviewData) IsAccountSelected(accountID string) bool {
 	if len(d.SelectedAccounts) == 0 {
 		return true
 	}
@@ -338,7 +338,7 @@ func handleBudgetView(w http.ResponseWriter, r *http.Request, database *db.DB, t
 	}
 
 	data := BudgetData{
-		BaseData:         newBaseData(database, "", tmpl.version),
+		BaseData:         newBaseData(database, "budget", tmpl.version),
 		BudgetRows:       rows,
 		TotalBudgetCents: totalBudget,
 		TotalSpentCents:  totalSpent,
@@ -414,11 +414,11 @@ func cadenceMultiplier(cadence string) float64 {
 
 func handleCommitmentsView(w http.ResponseWriter, r *http.Request, database *db.DB, tmpl *TemplateEngine) {
 	data := CommitmentsData{
-		BaseData: newBaseData(database, "", tmpl.version),
+		BaseData: newBaseData(database, "commitments", tmpl.version),
 	}
 
 	rows, err := database.Query(`
-		SELECT id, name, COALESCE(expected_cents,0), cadence, confirmed, source, direction
+		SELECT id, name, COALESCE(merchant_norm,''), COALESCE(expected_cents,0), cadence, confirmed, source, direction
 		FROM commitments
 		ORDER BY name
 	`)
@@ -432,20 +432,21 @@ func handleCommitmentsView(w http.ResponseWriter, r *http.Request, database *db.
 	defer rows.Close()
 
 	type rawRow struct {
-		id        int64
-		name      string
-		expected  int64
-		cadence   string
-		confirmed bool
-		source    string
-		direction string
+		id           int64
+		name         string
+		merchantNorm string
+		expected     int64
+		cadence      string
+		confirmed    bool
+		source       string
+		direction    string
 	}
 
 	var allRows []rawRow
 	for rows.Next() {
 		var row rawRow
 		var confirmed int
-		if err := rows.Scan(&row.id, &row.name, &row.expected, &row.cadence, &confirmed, &row.source, &row.direction); err != nil {
+		if err := rows.Scan(&row.id, &row.name, &row.merchantNorm, &row.expected, &row.cadence, &confirmed, &row.source, &row.direction); err != nil {
 			continue
 		}
 		row.confirmed = confirmed != 0
@@ -492,6 +493,52 @@ func handleCommitmentsView(w http.ResponseWriter, r *http.Request, database *db.
 		case rr.direction != "income" && isDismissed:
 			data.ExpenseDismissed = append(data.ExpenseDismissed, cr)
 		}
+	}
+
+	// Detect duplicate commitments: group non-dismissed entries by merchant_norm
+	// and flag groups with 2+ members.
+	type dupEntry struct {
+		name         string
+		cadence      string
+		monthlyCents int64
+	}
+	dupGroups := map[string][]dupEntry{}
+	for _, rr := range allRows {
+		if rr.source == "dismissed" || rr.merchantNorm == "" {
+			continue
+		}
+		mult := cadenceMultiplier(rr.cadence)
+		monthly := int64(math.Round(float64(rr.expected) * mult))
+		dupGroups[rr.merchantNorm] = append(dupGroups[rr.merchantNorm], dupEntry{
+			name:         rr.name,
+			cadence:      rr.cadence,
+			monthlyCents: monthly,
+		})
+	}
+	for merchant, entries := range dupGroups {
+		if len(entries) < 2 {
+			continue
+		}
+		var totalMonthly int64
+		items := make([]DuplicateItem, 0, len(entries))
+		for _, e := range entries {
+			totalMonthly += e.monthlyCents
+			items = append(items, DuplicateItem{
+				Name:         e.name,
+				MonthlyCents: e.monthlyCents,
+				Cadence:      e.cadence,
+			})
+		}
+		severity := "medium"
+		if totalMonthly > 5000 { // > $50/mo combined
+			severity = "high"
+		}
+		data.Duplicates = append(data.Duplicates, DuplicateGroup{
+			Detail:            merchant + " appears " + fmt.Sprintf("%d", len(entries)) + " times",
+			Severity:          severity,
+			TotalMonthlyCents: totalMonthly,
+			Items:             items,
+		})
 	}
 
 	data.IncomeMonthlyTotal = incomeTotal
@@ -669,7 +716,7 @@ func handleInsightsView(w http.ResponseWriter, r *http.Request, database *db.DB,
 	}
 
 	data := InsightsData{
-		BaseData:               newBaseData(database, "", tmpl.version),
+		BaseData:               newBaseData(database, "insights", tmpl.version),
 		SavingsHistory:         entries,
 		SavingsHistoryReversed: reversed,
 		AvgSavingsRatePct:      avgRate,
@@ -719,7 +766,7 @@ func handleReviewView(w http.ResponseWriter, r *http.Request, database *db.DB, t
 	sort.Slice(allCats, func(i, j int) bool { return allCats[i].Name < allCats[j].Name })
 
 	data := ReviewData{
-		BaseData:         newBaseData(database, "", tmpl.version),
+		BaseData:         newBaseData(database, "review", tmpl.version),
 		AllAccounts:      queryAllAccounts(database),
 		SelectedAccounts: selectedAccounts,
 		ShowNoData:       showNoData,

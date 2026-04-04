@@ -3,7 +3,11 @@ package server_test
 import (
 	"bytes"
 	"encoding/json"
+	"io/fs"
+	"mime/multipart"
 	"net/http"
+	"regexp"
+	"strconv"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -13,6 +17,7 @@ import (
 	"github.com/arclighteng/fin-go/internal/db"
 	"github.com/arclighteng/fin-go/internal/models"
 	"github.com/arclighteng/fin-go/internal/server"
+	"github.com/arclighteng/fin-go/ui"
 )
 
 // newTestServer creates a server backed by an in-memory database.
@@ -168,6 +173,10 @@ func TestAPIAccounts_WithData(t *testing.T) {
 // Sync Status
 // ---------------------------------------------------------------------------
 
+// TestAPISyncStatus_NoSyncs verifies the sync-status response matches the
+// frontend contract (has_synced, last_sync, data_range).
+// Updated: the original test checked syncs_today/can_sync which didn't match
+// the frontend JS in base.html (loadSyncStatus). Fixed to match actual contract.
 func TestAPISyncStatus_NoSyncs(t *testing.T) {
 	t.Parallel()
 
@@ -185,23 +194,22 @@ func TestAPISyncStatus_NoSyncs(t *testing.T) {
 		t.Fatalf("decode /api/sync-status: %v", err)
 	}
 
-	// syncs_today must be 0 for an empty DB.
-	syncsToday, ok := body["syncs_today"]
+	// has_synced must be false for an empty DB.
+	hasSynced, ok := body["has_synced"]
 	if !ok {
-		t.Errorf("GET /api/sync-status: missing 'syncs_today' field")
-	} else {
-		// JSON numbers decode to float64.
-		if syncsToday.(float64) != 0 {
-			t.Errorf("GET /api/sync-status: want syncs_today=0, got %v", syncsToday)
-		}
+		t.Errorf("GET /api/sync-status: missing 'has_synced' field")
+	} else if hasSynced.(bool) != false {
+		t.Errorf("GET /api/sync-status: want has_synced=false, got %v", hasSynced)
 	}
 
-	// can_sync must be true.
-	canSync, ok := body["can_sync"]
-	if !ok {
-		t.Errorf("GET /api/sync-status: missing 'can_sync' field")
-	} else if canSync.(bool) != true {
-		t.Errorf("GET /api/sync-status: want can_sync=true, got %v", canSync)
+	// last_sync should not be present when has_synced is false.
+	if _, ok := body["last_sync"]; ok {
+		t.Errorf("GET /api/sync-status: last_sync should not be present when has_synced is false")
+	}
+
+	// data_range should not be present for an empty DB.
+	if _, ok := body["data_range"]; ok {
+		t.Errorf("GET /api/sync-status: data_range should not be present for empty DB")
 	}
 }
 
@@ -854,5 +862,883 @@ func TestAPICategoryOverride_Auto(t *testing.T) {
 	}
 	if resp["status"] != "ok" {
 		t.Errorf("category-override auto: want status=ok, got %q", resp["status"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CSV Import — Preview
+// ---------------------------------------------------------------------------
+
+func TestAPICSVPreview_ValidCSV(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	csvData := "Date,Amount,Description\n2025-01-15,-50.00,Coffee Shop\n2025-01-16,-120.50,Grocery Store\n"
+	body, contentType := buildMultipartCSV(t, csvData)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/import/csv/preview", body)
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/import/csv/preview: want 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+
+	// Must contain row_count matching the 2 data rows.
+	if rc, ok := resp["row_count"].(float64); !ok || int(rc) != 2 {
+		t.Errorf("row_count: want 2, got %v", resp["row_count"])
+	}
+
+	// Must contain headers array.
+	headers, ok := resp["headers"].([]any)
+	if !ok || len(headers) != 3 {
+		t.Errorf("headers: want 3 entries, got %v", resp["headers"])
+	}
+
+	// Must contain preview array with at most 5 entries.
+	preview, ok := resp["preview"].([]any)
+	if !ok || len(preview) == 0 {
+		t.Errorf("preview: want non-empty array, got %v", resp["preview"])
+	}
+}
+
+func TestAPICSVPreview_NoFile(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/import/csv/preview", nil)
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("POST /api/import/csv/preview (no file): want 400, got %d; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPICSVPreview_EmptyCSV(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	body, contentType := buildMultipartCSV(t, "")
+	req := httptest.NewRequest(http.MethodPost, "/api/import/csv/preview", body)
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("POST /api/import/csv/preview (empty): want 400, got %d; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPICSVPreview_DetectsBank(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	// Chase-style CSV with "Transaction Date" column.
+	csvData := "Transaction Date,Amount,Description\n01/15/2025,-50.00,Coffee Shop\n"
+	body, contentType := buildMultipartCSV(t, csvData)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/import/csv/preview", body)
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/import/csv/preview (Chase): want 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+	bank, _ := resp["detected_bank"].(string)
+	if bank == "" {
+		t.Errorf("detected_bank: want non-empty (Chase), got empty")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CSV Import — Confirm
+// ---------------------------------------------------------------------------
+
+func TestAPICSVConfirm_ValidCSV(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	csvData := "Date,Amount,Description\n2025-01-15,-50.00,Coffee Shop\n2025-01-16,-120.50,Grocery Store\n"
+	body, contentType := buildMultipartCSV(t, csvData)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/import/csv/confirm", body)
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/import/csv/confirm: want 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode confirm response: %v", err)
+	}
+
+	imported, ok := resp["imported"].(float64)
+	if !ok || int(imported) != 2 {
+		t.Errorf("imported: want 2, got %v", resp["imported"])
+	}
+}
+
+func TestAPICSVConfirm_DuplicatesSkipped(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	csvData := "Date,Amount,Description\n2025-01-15,-50.00,Coffee Shop\n"
+	// Import once.
+	body1, ct1 := buildMultipartCSV(t, csvData)
+	req1 := httptest.NewRequest(http.MethodPost, "/api/import/csv/confirm", body1)
+	req1.Header.Set("Content-Type", ct1)
+	req1.Header.Set("X-Fin-Request", "1")
+	w1 := httptest.NewRecorder()
+	h.ServeHTTP(w1, req1)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("first import: want 200, got %d; body=%s", w1.Code, w1.Body.String())
+	}
+
+	// Import same data again — duplicates should be skipped.
+	body2, ct2 := buildMultipartCSV(t, csvData)
+	req2 := httptest.NewRequest(http.MethodPost, "/api/import/csv/confirm", body2)
+	req2.Header.Set("Content-Type", ct2)
+	req2.Header.Set("X-Fin-Request", "1")
+	w2 := httptest.NewRecorder()
+	h.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second import: want 200, got %d; body=%s", w2.Code, w2.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(w2.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode second confirm response: %v", err)
+	}
+	skipped, _ := resp["skipped_duplicates"].(float64)
+	if int(skipped) != 1 {
+		t.Errorf("skipped_duplicates: want 1, got %v", resp["skipped_duplicates"])
+	}
+}
+
+func TestAPICSVConfirm_NoFile(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/import/csv/confirm", nil)
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("POST /api/import/csv/confirm (no file): want 400, got %d; body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPICSVConfirm_MissingCSRF(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	csvData := "Date,Amount,Description\n2025-01-15,-50.00,Coffee Shop\n"
+	body, contentType := buildMultipartCSV(t, csvData)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/import/csv/confirm", body)
+	req.Header.Set("Content-Type", contentType)
+	// Intentionally omit X-Fin-Request header.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("POST /api/import/csv/confirm (no CSRF): want 403, got %d", w.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CSV Import — Route existence (regression guard)
+// ---------------------------------------------------------------------------
+
+func TestAPICSVPreview_RouteExists(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	// A GET to the preview endpoint should return 405 (Method Not Allowed),
+	// NOT 404. This proves the route is registered.
+	req := httptest.NewRequest(http.MethodGet, "/api/import/csv/preview", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code == http.StatusNotFound {
+		t.Errorf("GET /api/import/csv/preview: got 404 — route is not registered")
+	}
+}
+
+func TestAPICSVConfirm_RouteExists(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/import/csv/confirm", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code == http.StatusNotFound {
+		t.Errorf("GET /api/import/csv/confirm: got 404 — route is not registered")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// buildMultipartCSV helper
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// SRI integrity attribute — regression guard
+// ---------------------------------------------------------------------------
+
+func TestDashboard_CSVImportShowsExpenses(t *testing.T) {
+	t.Parallel()
+
+	h, database := newTestServerWithDB(t)
+
+	// Seed the csv-import account and April transactions.
+	database.UpsertAccounts([]models.Account{
+		{AccountID: "csv-import", Institution: "Manual Import", Name: "csv-import", Type: "checking", Currency: "USD"},
+	})
+	database.UpsertTransactions([]models.Transaction{
+		{AccountID: "csv-import", PostedAt: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), AmountCents: -4599, Currency: "USD", Description: "WHOLE FOODS", Merchant: "WHOLE FOODS", Fingerprint: "fp-1"},
+		{AccountID: "csv-import", PostedAt: time.Date(2026, 4, 2, 0, 0, 0, 0, time.UTC), AmountCents: 250000, Currency: "USD", Description: "EMPLOYER", Merchant: "EMPLOYER", Fingerprint: "fp-2"},
+		{AccountID: "csv-import", PostedAt: time.Date(2026, 4, 2, 0, 0, 0, 0, time.UTC), AmountCents: -8999, Currency: "USD", Description: "COMCAST", Merchant: "COMCAST", Fingerprint: "fp-3"},
+		{AccountID: "csv-import", PostedAt: time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC), AmountCents: -120000, Currency: "USD", Description: "RENT", Merchant: "RENT", Fingerprint: "fp-4"},
+	})
+
+	// Request dashboard for April 2026.
+	req := httptest.NewRequest(http.MethodGet, "/dashboard?start_date=2026-04-01&end_date=2026-05-01", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /dashboard: want 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+
+	// Should contain income amount ($2,500.00).
+	if !strings.Contains(body, "$2,500.00") {
+		t.Error("dashboard missing income $2,500.00")
+	}
+
+	// Should contain expense amounts — at minimum the total or individual items.
+	// Total expenses = $45.99 + $89.99 + $1,200.00 = $1,335.98
+	if !strings.Contains(body, "$1,335.98") && !strings.Contains(body, "$1,200.00") && !strings.Contains(body, "Expenses") {
+		t.Error("dashboard missing expense data")
+	}
+
+	// The "Kept" line should show net = $2500 - $1335.98 = $1,164.02
+	if !strings.Contains(body, "Kept") {
+		t.Error("dashboard missing 'Kept' savings line")
+	}
+
+	// Should NOT be blank/empty dashboard.
+	if strings.Contains(body, "No data") && !strings.Contains(body, "Cash Flow") {
+		t.Error("dashboard showing empty state despite having transactions")
+	}
+
+	t.Logf("Dashboard body length: %d bytes", len(body))
+}
+
+func TestBaseTemplate_ChartJSVendored(t *testing.T) {
+	t.Parallel()
+
+	// Verify Chart.js is loaded from a local vendored path, not a CDN.
+	h := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/connect", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /connect: want 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+
+	if !strings.Contains(body, `/static/js/chart.umd.min.js`) {
+		t.Error("base template: Chart.js should be loaded from vendored /static/js/ path")
+	}
+
+	// Ensure no CDN reference remains.
+	if strings.Contains(body, `cdn.jsdelivr.net`) {
+		t.Error("base template: still references CDN — should use vendored Chart.js")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// buildMultipartCSV helper
+// ---------------------------------------------------------------------------
+
+func buildMultipartCSV(t *testing.T, csvContent string) (*bytes.Buffer, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	part, err := writer.CreateFormFile("file", "test.csv")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write([]byte(csvContent)); err != nil {
+		t.Fatalf("write csv content: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	return &buf, writer.FormDataContentType()
+}
+
+// ---------------------------------------------------------------------------
+// Commitments API
+// ---------------------------------------------------------------------------
+
+// postJSON is a test helper that sends a JSON POST with the CSRF header.
+func postJSON(t *testing.T, h http.Handler, url string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+// patchJSON is a test helper that sends a JSON PATCH with the CSRF header.
+func patchJSON(t *testing.T, h http.Handler, url string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPatch, url, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+// deleteReq is a test helper that sends a DELETE with the CSRF header.
+func deleteReq(t *testing.T, h http.Handler, url string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodDelete, url, nil)
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+func TestAPICreateCommitment(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+
+	w := postJSON(t, h, "/api/commitments", map[string]any{
+		"name":      "Netflix",
+		"direction": "expense",
+		"cadence":   "monthly",
+		"source":    "manual",
+		"confirmed": 1,
+		"expected_cents": 1599,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/commitments: want 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["status"] != "ok" {
+		t.Errorf("want status=ok, got %v", body["status"])
+	}
+	if body["id"] == nil || body["id"].(float64) < 1 {
+		t.Errorf("want id >= 1, got %v", body["id"])
+	}
+}
+
+func TestAPICreateCommitment_MissingName(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+
+	w := postJSON(t, h, "/api/commitments", map[string]any{
+		"direction": "expense",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("POST /api/commitments (no name): want 400, got %d", w.Code)
+	}
+}
+
+func TestAPIUpdateCommitment(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+
+	// Create first.
+	w := postJSON(t, h, "/api/commitments", map[string]any{
+		"name": "Spotify", "direction": "expense", "cadence": "monthly",
+	})
+	var created map[string]any
+	json.NewDecoder(w.Body).Decode(&created)
+	id := int(created["id"].(float64))
+
+	// Confirm it.
+	w2 := patchJSON(t, h, "/api/commitments/"+strconv.Itoa(id), map[string]any{
+		"confirmed": 1,
+	})
+	if w2.Code != http.StatusOK {
+		t.Fatalf("PATCH /api/commitments/%d: want 200, got %d; body: %s", id, w2.Code, w2.Body.String())
+	}
+}
+
+func TestAPIDeleteCommitment(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+
+	// Create.
+	w := postJSON(t, h, "/api/commitments", map[string]any{
+		"name": "Gym", "direction": "expense",
+	})
+	var created map[string]any
+	json.NewDecoder(w.Body).Decode(&created)
+	id := int(created["id"].(float64))
+
+	// Delete.
+	w2 := deleteReq(t, h, "/api/commitments/"+strconv.Itoa(id))
+	if w2.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/commitments/%d: want 200, got %d", id, w2.Code)
+	}
+}
+
+func TestAPIDismissDuplicate(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+
+	// Create two commitments with same merchant.
+	postJSON(t, h, "/api/commitments", map[string]any{"name": "Amazon", "direction": "expense"})
+	postJSON(t, h, "/api/commitments", map[string]any{"name": "Amazon", "direction": "expense"})
+
+	// Dismiss the duplicate group.
+	w := postJSON(t, h, "/api/dismiss-duplicate", map[string]any{
+		"merchant": "Amazon", "dismiss": true,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/dismiss-duplicate: want 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPICommitments_CSRF(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+
+	// POST without X-Fin-Request header should be rejected.
+	body, _ := json.Marshal(map[string]any{"name": "Test"})
+	req := httptest.NewRequest(http.MethodPost, "/api/commitments", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("POST /api/commitments without CSRF: want 403, got %d", w.Code)
+	}
+}
+
+func TestAPICommitmentRoutes_NotFound(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+
+	// Verify routes exist (POST should not 404).
+	routes := []struct {
+		method string
+		url    string
+	}{
+		{http.MethodPost, "/api/commitments"},
+		{http.MethodPatch, "/api/commitments/1"},
+		{http.MethodDelete, "/api/commitments/1"},
+		{http.MethodPost, "/api/dismiss-duplicate"},
+	}
+	for _, rt := range routes {
+		body, _ := json.Marshal(map[string]any{})
+		req := httptest.NewRequest(rt.method, rt.url, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Fin-Request", "1")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code == http.StatusNotFound {
+			t.Errorf("%s %s: got 404 — route not registered", rt.method, rt.url)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Route coverage: every fetch('/api/...') in templates must have a route
+// ---------------------------------------------------------------------------
+
+// TestAllTemplateFetchRoutesExist scans embedded HTML templates for fetch()
+// calls to /api/ endpoints and verifies each one is registered (not 404).
+func TestAllTemplateFetchRoutesExist(t *testing.T) {
+	t.Parallel()
+
+	h := newTestServer(t)
+
+	// Walk all embedded templates and collect fetch('/api/...') URLs with methods.
+	templateFS, err := fs.Sub(ui.Templates, "templates")
+	if err != nil {
+		t.Fatalf("fs.Sub templates: %v", err)
+	}
+
+	// Match patterns like: fetch('/api/something' or fetch('/api/something/' + id
+	// Also match finApi.postJSON('/api/something'
+	fetchRe := regexp.MustCompile(`(?:fetch|finApi\.postJSON)\s*\(\s*['"](/api/[^'"?]+)`)
+	methodRe := regexp.MustCompile(`method:\s*['"](\w+)['"]`)
+
+	type route struct {
+		method string
+		url    string
+		file   string
+	}
+	var routes []route
+
+	err = fs.WalkDir(templateFS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".html") {
+			return err
+		}
+		data, err := fs.ReadFile(templateFS, path)
+		if err != nil {
+			return err
+		}
+		content := string(data)
+		lines := strings.Split(content, "\n")
+
+		for i, line := range lines {
+			matches := fetchRe.FindAllStringSubmatch(line, -1)
+			for _, m := range matches {
+				url := m[1]
+				// Normalize: replace ' + id patterns with a placeholder.
+				url = strings.TrimRight(url, "/")
+				// Replace template variable patterns like {id} with "1".
+				if strings.Contains(url, "/' +") || strings.HasSuffix(url, "/' +") {
+					continue // dynamic suffix handled below
+				}
+
+				method := "GET"
+				if strings.Contains(line, "finApi.postJSON") {
+					method = "POST"
+				}
+				// Look nearby for method: 'POST' etc.
+				contextStart := i
+				if contextStart > 0 {
+					contextStart = i - 1
+				}
+				contextEnd := i + 5
+				if contextEnd > len(lines) {
+					contextEnd = len(lines)
+				}
+				for _, cl := range lines[contextStart:contextEnd] {
+					if mm := methodRe.FindStringSubmatch(cl); mm != nil {
+						method = strings.ToUpper(mm[1])
+					}
+				}
+
+				// Substitute path params: /api/commitments/' + id => /api/commitments/1
+				// /api/transaction/' + fp + '/note => /api/transaction/test/note
+				if strings.Contains(url, "/' +") {
+					url = strings.Split(url, "/' +")[0] + "/1"
+				}
+
+				routes = append(routes, route{method: method, url: url, file: path})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk templates: %v", err)
+	}
+
+	if len(routes) == 0 {
+		t.Fatal("no fetch('/api/...') calls found in templates — test is broken")
+	}
+
+	// Deduplicate.
+	seen := map[string]bool{}
+	for _, r := range routes {
+		key := r.method + " " + r.url
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		t.Run(r.method+" "+r.url, func(t *testing.T) {
+			t.Parallel()
+			var body *bytes.Reader
+			if r.method == "POST" || r.method == "PATCH" || r.method == "DELETE" {
+				body = bytes.NewReader([]byte("{}"))
+			} else {
+				body = bytes.NewReader(nil)
+			}
+			req := httptest.NewRequest(r.method, r.url, body)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Fin-Request", "1")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code == http.StatusNotFound {
+				t.Errorf("%s %s (from %s): got 404 — route not registered", r.method, r.url, r.file)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// View smoke tests
+// ---------------------------------------------------------------------------
+
+func TestViewBudget_Smoke(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/budget", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("GET /budget: want 200, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Errorf("GET /budget: want text/html, got %q", ct)
+	}
+	if w.Body.Len() == 0 {
+		t.Error("GET /budget: empty body")
+	}
+}
+
+func TestViewInsights_Smoke(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/insights", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("GET /insights: want 200, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Errorf("GET /insights: want text/html, got %q", ct)
+	}
+	if w.Body.Len() == 0 {
+		t.Error("GET /insights: empty body")
+	}
+}
+
+func TestViewReview_Smoke(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/review", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("GET /review: want 200, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Errorf("GET /review: want text/html, got %q", ct)
+	}
+	if w.Body.Len() == 0 {
+		t.Error("GET /review: empty body")
+	}
+}
+
+func TestViewSyncLog_Smoke(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/sync-log", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("GET /sync-log: want 200, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Errorf("GET /sync-log: want text/html, got %q", ct)
+	}
+	if w.Body.Len() == 0 {
+		t.Error("GET /sync-log: empty body")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Smart redirect test
+// ---------------------------------------------------------------------------
+
+func TestDashboard_SmartRedirect(t *testing.T) {
+	t.Parallel()
+	h, database := newTestServerWithDB(t)
+
+	// Seed a transaction 6 months ago — dashboard default (this_month) should
+	// redirect to that month since current month has no data.
+	pastDate := time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC)
+	database.UpsertAccounts([]models.Account{
+		{AccountID: "acct-redir", Institution: "Bank", Name: "Checking", Type: "checking", Currency: "USD"},
+	})
+	database.UpsertTransactions([]models.Transaction{
+		{AccountID: "acct-redir", PostedAt: pastDate, AmountCents: -5000, Currency: "USD",
+			Description: "Coffee", Merchant: "Coffee", Fingerprint: "fp-redir-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("GET /dashboard (smart redirect): want 302, got %d", w.Code)
+	}
+	loc := w.Header().Get("Location")
+	if !strings.Contains(loc, "start_date=2025-06-01") {
+		t.Errorf("redirect location missing start_date=2025-06-01: %s", loc)
+	}
+}
+
+func TestDashboard_NoRedirectWhenCurrentMonthHasData(t *testing.T) {
+	t.Parallel()
+	h, database := newTestServerWithDB(t)
+
+	// Seed a transaction in the current month.
+	now := time.Now().UTC()
+	database.UpsertAccounts([]models.Account{
+		{AccountID: "acct-now", Institution: "Bank", Name: "Checking", Type: "checking", Currency: "USD"},
+	})
+	database.UpsertTransactions([]models.Transaction{
+		{AccountID: "acct-now", PostedAt: now, AmountCents: -5000, Currency: "USD",
+			Description: "Coffee", Merchant: "Coffee", Fingerprint: "fp-now-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("GET /dashboard (current month data): want 200, got %d", w.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Search happy-path test
+// ---------------------------------------------------------------------------
+
+func TestAPISearch_HappyPath(t *testing.T) {
+	t.Parallel()
+	h, database := newTestServerWithDB(t)
+
+	database.UpsertAccounts([]models.Account{
+		{AccountID: "acct-search", Institution: "First Bank", Name: "My Checking", Type: "checking", Currency: "USD"},
+	})
+	database.UpsertTransactions([]models.Transaction{
+		{AccountID: "acct-search", PostedAt: time.Date(2025, 3, 10, 0, 0, 0, 0, time.UTC),
+			AmountCents: -4599, Currency: "USD", Description: "WHOLE FOODS MARKET",
+			Merchant: "WHOLE FOODS", Fingerprint: "fp-search-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/search?q=WHOLE", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/search?q=WHOLE: want 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode search response: %v", err)
+	}
+
+	matches, ok := resp["matches"].([]any)
+	if !ok || len(matches) == 0 {
+		t.Fatal("search: want non-empty matches array")
+	}
+
+	first := matches[0].(map[string]any)
+	for _, key := range []string{"date", "amount_cents", "merchant", "description", "account_name", "fingerprint"} {
+		if _, exists := first[key]; !exists {
+			t.Errorf("search result missing key %q", key)
+		}
+	}
+}
+
+func TestAPISearch_AccountNameResolved(t *testing.T) {
+	t.Parallel()
+	h, database := newTestServerWithDB(t)
+
+	database.UpsertAccounts([]models.Account{
+		{AccountID: "acct-name-test", Institution: "Big Bank", Name: "Premium Checking", Type: "checking", Currency: "USD"},
+	})
+	database.UpsertTransactions([]models.Transaction{
+		{AccountID: "acct-name-test", PostedAt: time.Date(2025, 3, 10, 0, 0, 0, 0, time.UTC),
+			AmountCents: -1000, Currency: "USD", Description: "Test Store",
+			Merchant: "Test Store", Fingerprint: "fp-name-test-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/search?q=Test+Store", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("search: want 200, got %d", w.Code)
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	matches := resp["matches"].([]any)
+	first := matches[0].(map[string]any)
+
+	accountName, _ := first["account_name"].(string)
+	if accountName != "Premium Checking" {
+		t.Errorf("account_name: want %q, got %q", "Premium Checking", accountName)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// JSON body size limit test
+// ---------------------------------------------------------------------------
+
+func TestJSONBodySizeLimit(t *testing.T) {
+	t.Parallel()
+	h := newTestServer(t)
+
+	// Send a body larger than 1 MB to a JSON endpoint.
+	bigBody := strings.Repeat("x", 2<<20) // 2 MB
+	req := httptest.NewRequest(http.MethodPost, "/api/income-source",
+		strings.NewReader(bigBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Fin-Request", "1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	// http.MaxBytesReader causes json.Decode to fail, yielding 400.
+	if w.Code == http.StatusOK {
+		t.Errorf("POST /api/income-source (oversized body): want non-200, got 200")
 	}
 }

@@ -333,7 +333,7 @@ async function postPreview(file) {
         var data = await resp.json();
         if (!resp.ok) {
             showCsvLoading(false);
-            showStatus(data.detail || 'Preview failed.', 'error');
+            showStatus(data.error || 'Preview failed.', 'error');
             return;
         }
         _csvPreviewData = data;
@@ -419,7 +419,7 @@ async function confirmCsvImport() {
         if (!resp.ok) {
             importBtn.disabled = false;
             importBtn.textContent = 'Import transactions';
-            showStatus(data.detail || 'Import failed.', 'error');
+            showStatus(data.error || 'Import failed.', 'error');
             return;
         }
         importBtn.innerHTML = '&#10003; Imported!';
@@ -455,7 +455,7 @@ function toggleAccordion(trigger) {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-    var hash = window.location.hash.replace('#', '');
+    var hash = window.location.hash.replace('#', '').replace(/[^a-zA-Z0-9-]/g, '');
     if (hash) {
         var item = document.querySelector('.bank-accordion-item[data-bank="' + hash + '"]');
         if (item) item.classList.add('open');

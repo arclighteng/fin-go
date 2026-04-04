@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/arclighteng/fin-go/internal/config"
@@ -61,6 +62,7 @@ func New(database *db.DB, cfg *config.Config, version string) http.Handler {
 
 	// API
 	r.Route("/api", func(r chi.Router) {
+		r.Use(maxJSONBody)
 		r.Get("/version", s.handleAPIVersion)
 		r.Get("/accounts", s.handleAPIAccounts)
 		r.Post("/sync", s.handleAPISync)
@@ -94,6 +96,16 @@ func New(database *db.DB, cfg *config.Config, version string) http.Handler {
 
 		// SimpleFIN token
 		r.Post("/simplefin-token", s.handleAPISimpleFinToken)
+
+		// CSV import
+		r.Post("/import/csv/preview", s.handleAPICSVPreview)
+		r.Post("/import/csv/confirm", s.handleAPICSVConfirm)
+
+		// Commitments
+		r.Post("/commitments", s.handleAPICreateCommitment)
+		r.Patch("/commitments/{id}", s.handleAPIUpdateCommitment)
+		r.Delete("/commitments/{id}", s.handleAPIDeleteCommitment)
+		r.Post("/dismiss-duplicate", s.handleAPIDismissDuplicate)
 	})
 
 	return r
@@ -111,7 +123,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		// <script> blocks. The proper fix is to extract all inline JS into separate .js files.
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; "+
-				"script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "+
+				"script-src 'self' 'unsafe-inline'; "+
 				"style-src 'self' 'unsafe-inline'; "+
 				"img-src 'self' data:; "+
 				"font-src 'self'")
@@ -167,17 +179,35 @@ func (s *Server) handleAPIAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAPISyncStatus(w http.ResponseWriter, r *http.Request) {
-	count, err := s.db.RunsInLast24Hours()
+	resp := map[string]any{
+		"has_synced": false,
+	}
+
+	runs, err := s.db.RecentRuns(1)
 	if err != nil {
 		log.Printf("handleAPISyncStatus: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"syncs_today": count,
-		"limit":       MaxSyncsPerDay,
-		"can_sync":    count < MaxSyncsPerDay,
-	})
+
+	if len(runs) > 0 {
+		resp["has_synced"] = true
+		resp["last_sync"] = map[string]any{
+			"timestamp": runs[0].RanAt.Format(time.RFC3339),
+		}
+	}
+
+	// Data range from transaction dates.
+	oldest, errOld := s.db.OldestTransaction()
+	newest, errNew := s.db.NewestTransaction()
+	if errOld == nil && errNew == nil && !oldest.IsZero() && !newest.IsZero() {
+		resp["data_range"] = map[string]string{
+			"earliest": oldest.Format("2006-01-02"),
+			"latest":   newest.Format("2006-01-02"),
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleAPISyncHistory(w http.ResponseWriter, r *http.Request) {
@@ -188,6 +218,22 @@ func (s *Server) handleAPISyncHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, runs)
+}
+
+// maxJSONBodySize limits the request body for non-multipart API calls.
+const maxJSONBodySize = 1 << 20 // 1 MB
+
+// maxJSONBody wraps r.Body with http.MaxBytesReader for non-multipart
+// requests. Multipart requests (CSV uploads) are excluded because they
+// manage their own size limits via http.MaxBytesReader in readCSVUpload.
+func maxJSONBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ct := r.Header.Get("Content-Type")
+		if r.Body != nil && !strings.HasPrefix(ct, "multipart/") {
+			r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodySize)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

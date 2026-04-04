@@ -633,7 +633,7 @@
         </div>
 
         <!-- CARD 3: SPENDING BREAKDOWN -->
-        {{if .CategoryBreakdown}}
+        {{if and .CategoryBreakdown .CurrentPeriod}}
         <div class="card-v3 card-tall-v3">
             <div class="card-title-v3">
                 Spending
@@ -726,35 +726,7 @@
         </div>
         {{end}}
 
-        <!-- CARD 4: HEADS UP -->
-        {{if .AttentionItems}}
-        <div class="card-v3 card-full-v3">
-            <div class="card-title-v3">Heads Up</div>
-            <div id="headsUpContent">
-                {{range $i, $item := .AttentionItems}}
-                <div class="hu-item" id="huItem{{add $i 1}}"
-                    {{if .DrilldownScope}}onclick="finDrilldown.open('{{.DrilldownScope}}')" role="button" tabindex="0" style="cursor:pointer"{{end}}>
-                    <div class="hu-item-title">{{.Title}}</div>
-                    {{if .Detail}}
-                    <div class="hu-item-detail">{{.Detail}}</div>
-                    {{end}}
-                    {{if and (eq .ActionType "alert") (not .Actioned)}}
-                    <div class="hu-actions">
-                        <button class="hu-btn primary" onclick="event.stopPropagation(); dismissAlert('{{.Key}}', 'not_suspicious', {{add $i 1}})">Looks fine</button>
-                        <button class="hu-btn" onclick="event.stopPropagation(); dismissAlert('{{.Key}}', 'confirmed', {{add $i 1}})">Flag it</button>
-                    </div>
-                    {{else if eq .Type "duplicate_sub"}}
-                    <div class="hu-actions">
-                        <a href="/commitments" class="hu-btn primary" style="text-decoration:none;" onclick="event.stopPropagation()">Review &amp; Dismiss</a>
-                    </div>
-                    {{end}}
-                </div>
-                {{end}}
-            </div>
-        </div>
-        {{end}}
-
-        <!-- CARD 5: YOUR TREND -->
+        <!-- CARD 4: YOUR TREND -->
         {{if gt (len .Periods) 1}}
         <div class="card-v3 card-full-v3">
             <div class="card-title-v3">Your Trend</div>
@@ -839,7 +811,7 @@ function navigateMonth(delta) {
         url.searchParams.delete('end_date');
     } else {
         var start = targetDate.toISOString().split('T')[0];
-        var endDate = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0);
+        var endDate = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 1);
         var end = endDate.toISOString().split('T')[0];
         url.searchParams.set('start_date', start);
         url.searchParams.set('end_date', end);
@@ -859,7 +831,7 @@ function navigateToMonth(startDate) {
         url.searchParams.delete('end_date');
     } else {
         var start = targetDate.toISOString().split('T')[0];
-        var endDate = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0);
+        var endDate = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 1);
         var end = endDate.toISOString().split('T')[0];
         url.searchParams.set('start_date', start);
         url.searchParams.set('end_date', end);

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -36,11 +37,16 @@ func Load() *Config {
 }
 
 func getSimpleFinURL() string {
-	// Try keyring first
+	// Try keyring first.
 	if url, err := credentials.GetSimpleFinURL(); err == nil && url != "" {
 		return url
 	}
-	return strings.TrimSpace(os.Getenv("SIMPLEFIN_ACCESS_URL"))
+	// Fall back to environment variable.
+	if envURL := strings.TrimSpace(os.Getenv("SIMPLEFIN_ACCESS_URL")); envURL != "" {
+		log.Printf("using SIMPLEFIN_ACCESS_URL from environment (keyring empty or unavailable)")
+		return envURL
+	}
+	return ""
 }
 
 func defaultDBPath() string {
