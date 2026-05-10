@@ -1404,17 +1404,21 @@ func TestAPICommitmentRoutes_NotFound(t *testing.T) {
 // Route coverage: every fetch('/api/...') in templates must have a route
 // ---------------------------------------------------------------------------
 
-// TestAllTemplateFetchRoutesExist scans embedded HTML templates for fetch()
-// calls to /api/ endpoints and verifies each one is registered (not 404).
+// TestAllTemplateFetchRoutesExist scans embedded HTML templates and JS assets
+// for fetch() calls to /api/ endpoints and verifies each one is registered
+// (not 404).
 func TestAllTemplateFetchRoutesExist(t *testing.T) {
 	t.Parallel()
 
 	h := newTestServer(t)
 
-	// Walk all embedded templates and collect fetch('/api/...') URLs with methods.
 	templateFS, err := fs.Sub(ui.Templates, "templates")
 	if err != nil {
 		t.Fatalf("fs.Sub templates: %v", err)
+	}
+	staticFS, err := fs.Sub(ui.Static, "static")
+	if err != nil {
+		t.Fatalf("fs.Sub static: %v", err)
 	}
 
 	// Match patterns like: fetch('/api/something' or fetch('/api/something/' + id
@@ -1429,64 +1433,69 @@ func TestAllTemplateFetchRoutesExist(t *testing.T) {
 	}
 	var routes []route
 
-	err = fs.WalkDir(templateFS, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".html") {
-			return err
-		}
-		data, err := fs.ReadFile(templateFS, path)
-		if err != nil {
-			return err
-		}
-		content := string(data)
-		lines := strings.Split(content, "\n")
-
-		for i, line := range lines {
-			matches := fetchRe.FindAllStringSubmatch(line, -1)
-			for _, m := range matches {
-				url := m[1]
-				// Normalize: replace ' + id patterns with a placeholder.
-				url = strings.TrimRight(url, "/")
-				// Replace template variable patterns like {id} with "1".
-				if strings.Contains(url, "/' +") || strings.HasSuffix(url, "/' +") {
-					continue // dynamic suffix handled below
-				}
-
-				method := "GET"
-				if strings.Contains(line, "finApi.postJSON") {
-					method = "POST"
-				}
-				// Look nearby for method: 'POST' etc.
-				contextStart := i
-				if contextStart > 0 {
-					contextStart = i - 1
-				}
-				contextEnd := i + 5
-				if contextEnd > len(lines) {
-					contextEnd = len(lines)
-				}
-				for _, cl := range lines[contextStart:contextEnd] {
-					if mm := methodRe.FindStringSubmatch(cl); mm != nil {
-						method = strings.ToUpper(mm[1])
-					}
-				}
-
-				// Substitute path params: /api/commitments/' + id => /api/commitments/1
-				// /api/transaction/' + fp + '/note => /api/transaction/test/note
-				if strings.Contains(url, "/' +") {
-					url = strings.Split(url, "/' +")[0] + "/1"
-				}
-
-				routes = append(routes, route{method: method, url: url, file: path})
+	scan := func(label string, fsys fs.FS, suffix string) error {
+		return fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, suffix) {
+				return err
 			}
-		}
-		return nil
-	})
-	if err != nil {
+			// Skip vendored libraries we don't author (Chart.js).
+			if strings.Contains(path, "chart.umd") {
+				return nil
+			}
+			data, err := fs.ReadFile(fsys, path)
+			if err != nil {
+				return err
+			}
+			content := string(data)
+			lines := strings.Split(content, "\n")
+
+			for i, line := range lines {
+				matches := fetchRe.FindAllStringSubmatch(line, -1)
+				for _, m := range matches {
+					url := m[1]
+					url = strings.TrimRight(url, "/")
+					if strings.Contains(url, "/' +") || strings.HasSuffix(url, "/' +") {
+						continue
+					}
+
+					method := "GET"
+					if strings.Contains(line, "finApi.postJSON") {
+						method = "POST"
+					}
+					contextStart := i
+					if contextStart > 0 {
+						contextStart = i - 1
+					}
+					contextEnd := i + 5
+					if contextEnd > len(lines) {
+						contextEnd = len(lines)
+					}
+					for _, cl := range lines[contextStart:contextEnd] {
+						if mm := methodRe.FindStringSubmatch(cl); mm != nil {
+							method = strings.ToUpper(mm[1])
+						}
+					}
+
+					if strings.Contains(url, "/' +") {
+						url = strings.Split(url, "/' +")[0] + "/1"
+					}
+
+					routes = append(routes, route{method: method, url: url, file: label + ":" + path})
+				}
+			}
+			return nil
+		})
+	}
+
+	if err := scan("template", templateFS, ".html"); err != nil {
 		t.Fatalf("walk templates: %v", err)
+	}
+	if err := scan("static", staticFS, ".js"); err != nil {
+		t.Fatalf("walk static: %v", err)
 	}
 
 	if len(routes) == 0 {
-		t.Fatal("no fetch('/api/...') calls found in templates — test is broken")
+		t.Fatal("no fetch('/api/...') calls found in templates or JS — test is broken")
 	}
 
 	// Deduplicate.
