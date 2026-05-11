@@ -1,6 +1,8 @@
 dist/
 /fin
 /fin.exe
+/e2e/fin-test
+/e2e/fin-test.exe
 *.db
 .env
 .env.local
