@@ -4,6 +4,11 @@ import * as path from 'path';
 
 const testDBPath = path.join(__dirname, '.test.db');
 
+const isWindows = os.platform() === 'win32';
+const binaryName = isWindows ? 'fin-test.exe' : 'fin-test';
+const binaryBuildPath = `e2e/${binaryName}`;
+const binaryRunPath = isWindows ? `e2e\\${binaryName}` : `./e2e/${binaryName}`;
+
 export default defineConfig({
   testDir: './tests',
   timeout: 30_000,
@@ -27,9 +32,9 @@ export default defineConfig({
     // Build the binary first, then start it with a fresh temp DB.
     // Relies on `go` being available on PATH (no hardcoded absolute path).
     command: [
-      'go build -o e2e/fin-test.exe ./cmd/fin',
+      `go build -o ${binaryBuildPath} ./cmd/fin`,
       '&&',
-      'e2e\\fin-test.exe web --host 127.0.0.1 --port 8000',
+      `${binaryRunPath} web --host 127.0.0.1 --port 8000`,
     ].join(' '),
     cwd: path.join(__dirname, '..'),
     url: 'http://127.0.0.1:8000/health',
