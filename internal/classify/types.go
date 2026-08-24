@@ -215,9 +215,21 @@ func (ir *IntegrityReport) Score() float64 {
 }
 
 // IsActionable reports whether recommendations should be shown to the user.
-// Recommendations are gated at a score threshold of 0.8.
+//
+// Two gates apply (ADA-111):
+//  1. A critical flag (FlagReconciliationFailed) hard-suppresses advice
+//     regardless of score: if a statement does not reconcile, the underlying
+//     numbers are in doubt and no recommendation can be trusted.
+//  2. The numeric threshold is strictly greater than 0.8. A single
+//     reconciliation-sized penalty (0.20) lands a report at exactly 0.80; the
+//     old `>= 0.8` boundary left that case actionable. Strict `>` closes it.
 func (ir *IntegrityReport) IsActionable() bool {
-	return ir.Score() >= 0.8
+	for _, f := range ir.Flags {
+		if f == FlagReconciliationFailed {
+			return false
+		}
+	}
+	return ir.Score() > 0.8
 }
 
 // Report is the canonical output for a reporting period.

@@ -357,6 +357,73 @@ func TestProjectMonthlyBudgetBasedOnMonths(t *testing.T) {
 	}
 }
 
+// TestSpendingPlanAnnualChargeAmortizedOverWindow verifies Bug 5: an
+// infrequent/annual charge is amortized over the WINDOW LENGTH in months, not
+// reported as a full monthly average.
+func TestSpendingPlanAnnualChargeAmortizedOverWindow(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	createMinimalSchema(t, db)
+
+	// One $1,200 charge, once, inside a 6-month window.
+	now := time.Now().UTC()
+	when := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).
+		AddDate(0, -3, 14).Format("2006-01-02")
+	insertTransaction(t, db, "fp-annual", when, "annual insurance", -120000)
+
+	plan, err := SpendingPlan(db, PlanOptions{Months: 6})
+	if err != nil {
+		t.Fatalf("SpendingPlan: %v", err)
+	}
+
+	// Amortized: 120000 / 6 = 20000/mo. The buggy behavior would report 120000
+	// (sum divided by the single active month).
+	if plan.TotalMonthlySpend != 20000 {
+		t.Errorf("annual charge amortization: want 20000 (120000/6), got %d", plan.TotalMonthlySpend)
+	}
+	if plan.TotalMonthlySpend == 120000 {
+		t.Error("charge was NOT amortized: reported full amount as monthly average")
+	}
+
+	// The bucket that holds the charge should also report the amortized average.
+	var found bool
+	for _, b := range plan.Buckets {
+		if b.MonthlyAvgCents == 20000 {
+			found = true
+		}
+		if b.MonthlyAvgCents == 120000 {
+			t.Errorf("bucket %v reports un-amortized monthly avg 120000", b.Bucket)
+		}
+	}
+	if !found {
+		t.Error("no bucket reports the amortized 20000/mo average")
+	}
+}
+
+// TestSpendingPlanIncomeAmortizedOverWindow verifies the consistent denominator
+// convention: income is also averaged over the window length, not over the
+// count of months that happened to contain income.
+func TestSpendingPlanIncomeAmortizedOverWindow(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	createMinimalSchema(t, db)
+
+	// A single $6,000 payroll deposit inside a 6-month window.
+	now := time.Now().UTC()
+	when := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).
+		AddDate(0, -2, 14).Format("2006-01-02")
+	insertTransaction(t, db, "fp-pay", when, "payroll direct deposit", 600000)
+
+	plan, err := SpendingPlan(db, PlanOptions{Months: 6})
+	if err != nil {
+		t.Fatalf("SpendingPlan: %v", err)
+	}
+	// 600000 / 6 = 100000/mo (window length), not 600000 (single income month).
+	if plan.TotalMonthlyIncome != 100000 {
+		t.Errorf("income denominator: want 100000 (600000/6), got %d", plan.TotalMonthlyIncome)
+	}
+}
+
 // TestSpendingPlanPendingExcluded verifies that pending transactions are not counted.
 func TestSpendingPlanPendingExcluded(t *testing.T) {
 	t.Parallel()

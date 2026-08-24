@@ -259,6 +259,136 @@ func TestImport_FingerprintUnique(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Import — Capital One split Debit/Credit columns (ADA-109)
+// ---------------------------------------------------------------------------
+
+// App-wide sign convention (see internal/server/views.go): negative amount_cents
+// = expense, positive = income. Capital One exports split money-out (Debit) and
+// money-in (Credit) across two columns; a purchase must import negative and a
+// payment/refund must import positive and non-zero.
+func TestImport_CapitalOne_DebitCreditSigns(t *testing.T) {
+	t.Parallel()
+
+	if bank := DetectBank([]string{
+		"Transaction Date", "Posted Date", "Card No.", "Description", "Category", "Debit", "Credit",
+	}); bank != "Capital One" {
+		t.Fatalf("DetectBank: want Capital One, got %q", bank)
+	}
+
+	csv := `Transaction Date,Posted Date,Card No.,Description,Category,Debit,Credit
+2025-02-01,2025-02-02,1234,Coffee Shop,Dining,12.34,
+2025-02-05,2025-02-06,1234,Online Payment,Payment,,200.00
+2025-02-08,2025-02-09,1234,Store Refund,Merchandise,,15.00`
+
+	result, err := Import(strings.NewReader(csv), ImportOptions{AccountID: "capone"})
+	if err != nil {
+		t.Fatalf("Import: unexpected error: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("want no per-row errors, got %v", result.Errors)
+	}
+	if len(result.Transactions) != 3 {
+		t.Fatalf("want 3 transactions, got %d", len(result.Transactions))
+	}
+
+	tests := []struct {
+		name      string
+		idx       int
+		wantCents int64
+	}{
+		{"purchase (Debit) -> negative expense", 0, -1234},
+		{"payment (Credit) -> positive income", 1, 20000},
+		{"refund (Credit) -> positive income", 2, 1500},
+	}
+	for _, tc := range tests {
+		if got := result.Transactions[tc.idx].AmountCents; got != tc.wantCents {
+			t.Errorf("%s: AmountCents: want %d, got %d", tc.name, tc.wantCents, got)
+		}
+	}
+	for i, txn := range result.Transactions {
+		if txn.AmountCents == 0 {
+			t.Errorf("transaction %d imported as $0 (silent-drop regression)", i)
+		}
+	}
+}
+
+// A non-empty-but-unparseable amount must surface as a per-row error, never a
+// silent $0. Both columns blank is an error for a split-column format (a Capital
+// One row is never legitimately blank in both).
+func TestImport_CapitalOne_AmountErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		csv  string
+	}{
+		{
+			name: "unparseable debit",
+			csv:  "Transaction Date,Description,Debit,Credit\n2025-02-01,Coffee,not-a-number,",
+		},
+		{
+			name: "unparseable credit",
+			csv:  "Transaction Date,Description,Debit,Credit\n2025-02-01,Payment,,xyz",
+		},
+		{
+			name: "both columns blank",
+			csv:  "Transaction Date,Description,Debit,Credit\n2025-02-01,Mystery,,",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := Import(strings.NewReader(tc.csv), ImportOptions{})
+			if err != nil {
+				t.Fatalf("Import: unexpected top-level error: %v", err)
+			}
+			if len(result.Errors) == 0 {
+				t.Errorf("%s: want a per-row error, got none (silent-0 regression)", tc.name)
+			}
+			if len(result.Transactions) != 0 {
+				t.Errorf("%s: want 0 transactions, got %d", tc.name, len(result.Transactions))
+			}
+		})
+	}
+}
+
+// An unrecognised split-column export (Debit + Credit present, not a known bank)
+// must still combine as a signed pair via the generic fallback rather than
+// collapsing onto one column.
+func TestImport_GenericDebitCreditPair(t *testing.T) {
+	t.Parallel()
+
+	// "Date"/"Memo" headers do not match any known bank format, forcing the
+	// generic keyword fallback.
+	if bank := DetectBank([]string{"Date", "Memo", "Debit", "Credit"}); bank != "" {
+		t.Fatalf("DetectBank: want unrecognised (empty), got %q", bank)
+	}
+
+	csv := `Date,Memo,Debit,Credit
+2025-03-01,Groceries,54.20,
+2025-03-02,Deposit,,300.00`
+
+	result, err := Import(strings.NewReader(csv), ImportOptions{})
+	if err != nil {
+		t.Fatalf("Import: unexpected error: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("want no per-row errors, got %v", result.Errors)
+	}
+	if len(result.Transactions) != 2 {
+		t.Fatalf("want 2 transactions, got %d", len(result.Transactions))
+	}
+	if got := result.Transactions[0].AmountCents; got != -5420 {
+		t.Errorf("debit row AmountCents: want -5420, got %d", got)
+	}
+	if got := result.Transactions[1].AmountCents; got != 30000 {
+		t.Errorf("credit row AmountCents: want 30000, got %d", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // DetectBank
 // ---------------------------------------------------------------------------
 

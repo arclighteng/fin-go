@@ -33,7 +33,7 @@ var ccPaymentKeywords = []string{
 // payrollKeywords identifies payroll / direct deposit transactions.
 var payrollKeywords = []string{
 	"payroll", "salary", "wages", "direct dep", "direct deposit",
-	"pay from", "paycheck", "adp", "paychex", "gusto", "workday",
+	"pay from", "paycheck", "employer", "adp", "paychex", "gusto", "workday",
 	"quickbooks payroll", "zenefits",
 }
 

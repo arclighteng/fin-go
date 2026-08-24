@@ -9,14 +9,27 @@ import (
 
 // Today returns today's date in the given timezone (or local if empty).
 func Today(tz string) time.Time {
-	loc := loadLocation(tz)
-	return time.Now().In(loc).Truncate(24 * time.Hour)
+	return todayIn(time.Now(), loadLocation(tz))
+}
+
+// todayIn is the injectable seam behind Today: it derives the civil date of now
+// in loc and returns local midnight for that date. Truncate must not be used —
+// it snaps to the UTC instant boundary, which is not local midnight outside UTC.
+func todayIn(now time.Time, loc *time.Location) time.Time {
+	return localMidnight(now, loc)
 }
 
 // EpochToDate converts Unix seconds to a date in the given timezone.
 func EpochToDate(epoch int64, tz string) time.Time {
-	loc := loadLocation(tz)
-	return time.Unix(epoch, 0).In(loc).Truncate(24 * time.Hour)
+	return localMidnight(time.Unix(epoch, 0), loadLocation(tz))
+}
+
+// localMidnight returns midnight of t's civil date in loc. Unlike
+// Truncate(24*time.Hour), which floors the absolute UTC instant, this snaps to
+// the start of the local calendar day.
+func localMidnight(t time.Time, loc *time.Location) time.Time {
+	y, m, d := t.In(loc).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, loc)
 }
 
 // PeriodBounds returns [start, endExclusive) for the period containing refDate.
@@ -117,15 +130,28 @@ type PeriodInfo struct {
 	Label        string
 }
 
-// DateRangeDays counts the days in a range.
+// DateRangeDays counts the whole calendar days in [start, endExclusive).
 func DateRangeDays(start, endExclusive time.Time) int {
-	return int(endExclusive.Sub(start).Hours() / 24)
+	return civilDaysBetween(start, endExclusive)
 }
 
-// DaysUntilEndOfMonth returns days remaining in the month.
+// DaysUntilEndOfMonth returns whole calendar days remaining in the month.
 func DaysUntilEndOfMonth(ref time.Time) int {
 	_, end := PeriodBounds(models.PeriodMonth, ref)
-	return int(end.Sub(ref).Hours() / 24)
+	return civilDaysBetween(ref, end)
+}
+
+// civilDaysBetween counts whole calendar days between the civil dates of start
+// and end. It measures the date difference in UTC (which has no DST), so a
+// 23-hour or 25-hour DST day still counts as exactly one calendar day. Dividing
+// an hour delta directly (end.Sub(start).Hours()/24) is off by one across a DST
+// transition.
+func civilDaysBetween(start, end time.Time) int {
+	ys, ms, ds := start.Date()
+	ye, me, de := end.Date()
+	su := time.Date(ys, ms, ds, 0, 0, 0, 0, time.UTC)
+	eu := time.Date(ye, me, de, 0, 0, 0, 0, time.UTC)
+	return int(eu.Sub(su).Hours() / 24)
 }
 
 // IsInRange checks if a date falls within [start, endExclusive).

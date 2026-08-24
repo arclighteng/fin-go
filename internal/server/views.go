@@ -5,9 +5,11 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/arclighteng/fin-go/internal/classify"
 	"github.com/arclighteng/fin-go/internal/db"
 	"github.com/go-chi/chi/v5"
 )
@@ -364,32 +366,98 @@ func queryAllAccounts(database *db.DB) []AccountRow {
 	return accounts
 }
 
-// queryPeriodTotals aggregates transaction totals for a date range.
-// Positive amount_cents = income, negative = expense (standard SimpleFIN convention).
+// queryPeriodTotals aggregates transaction totals for a date range by routing
+// through the canonical classify report engine (ADA-108). Income, expenses, and
+// net therefore obey the Truth Contract: a positive amount is NOT assumed to be
+// income — credit-card payments, transfers-in, and refunds are excluded from
+// income rather than inflating it. This is the single source of truth for the
+// dashboard and insights totals; naive positive=income SQL is gone.
 func queryPeriodTotals(database *db.DB, startISO, endISO string, accountFilter []string) *PeriodSummary {
-	q := `
-		SELECT
-			COALESCE(SUM(CASE WHEN amount_cents > 0 THEN amount_cents ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN amount_cents < 0 THEN ABS(amount_cents) ELSE 0 END), 0)
-		FROM transactions
-		WHERE posted_at >= ? AND posted_at < ?
-	`
-	args := []any{startISO, endISO}
-	q, args = appendAccountFilter(q, args, accountFilter)
-
-	var income, expenses int64
-	if err := database.QueryRow(q, args...).Scan(&income, &expenses); err != nil {
+	report := reportForRange(database, startISO, endISO, accountFilter)
+	if report == nil {
 		return nil
 	}
+
+	t := report.Totals
+	// At report time pattern detection is not wired, so expense buckets all land
+	// in Discretionary; summing the buckets keeps the total correct even if that
+	// changes later. RecurringCents = predictable obligations, the remainder is
+	// discretionary. The template renders expenses as Recurring+Discretionary.
+	recurring := t.FixedObligationsCents + t.VariableEssentialsCents
+	discretionary := t.DiscretionaryCents + t.OneOffsCents
 
 	return &PeriodSummary{
 		PeriodLabel:        monthPeriodLabel(startISO),
 		StartDate:          startISO,
 		EndDate:            endISO,
-		IncomeCents:        income,
-		DiscretionaryCents: expenses,
-		NetCents:           income - expenses,
+		IncomeCents:        t.IncomeCents,
+		RecurringCents:     recurring,
+		DiscretionaryCents: discretionary,
+		TransferCents:      t.TransferBalanceCents(),
+		NetCents:           t.NetCents(),
 	}
+}
+
+// reportForRange parses the ISO date window and produces the canonical report
+// for it, applying the demo-exclusion policy to the account filter.
+func reportForRange(database *db.DB, startISO, endISO string, accountFilter []string) *classify.Report {
+	start, err1 := time.Parse("2006-01-02", startISO)
+	end, err2 := time.Parse("2006-01-02", endISO)
+	if err1 != nil || err2 != nil {
+		return nil
+	}
+	filter := effectiveAccountFilter(database, accountFilter)
+	return classify.ReportPeriod(database.Underlying(), start, end, false, filter)
+}
+
+// effectiveAccountFilter implements the demo-exclusion policy (ADA-112).
+//
+// Demo accounts (account_id LIKE 'demo-%') must never be mixed into real
+// analysis. Policy, least-surprise:
+//   - An explicit account selection is honored verbatim (the user chose it).
+//   - With no selection, if BOTH real and demo accounts have data, the report
+//     is restricted to the real accounts so demo money can't inflate totals.
+//   - A pure-demo database (no real data) is left as all-accounts so the demo
+//     walkthrough still renders.
+//
+// The returned slice is an allow-list matching classify.ReportPeriod semantics
+// (nil = all accounts).
+func effectiveAccountFilter(database *db.DB, requested []string) []string {
+	if len(requested) > 0 {
+		return requested
+	}
+	real, demo := accountIDsByKind(database)
+	if len(demo) > 0 && len(real) > 0 {
+		return real
+	}
+	return nil
+}
+
+// accountIDsByKind splits the account ids that actually carry transactions into
+// real vs demo (demo-* prefix). Basing the split on the transactions table
+// guarantees the real allow-list covers every real-money account even if the
+// accounts table is incomplete.
+func accountIDsByKind(database *db.DB) (real, demo []string) {
+	rows, err := database.Query("SELECT DISTINCT account_id FROM transactions")
+	if err != nil {
+		return nil, nil
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		if strings.HasPrefix(id, "demo-") {
+			demo = append(demo, id)
+		} else {
+			real = append(real, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("accountIDsByKind: rows iteration: %v", err)
+	}
+	return real, demo
 }
 
 // queryHistoricalPeriods returns the n most recent calendar months as PeriodSummary,
@@ -424,44 +492,51 @@ func queryPendingCount(database *db.DB, startISO, endISO string, accountFilter [
 	return count
 }
 
-// queryCategoryBreakdown returns spending totals grouped by category_id.
-// Rows without a category override are bucketed as "other".
+// queryCategoryBreakdown returns spending totals grouped by category_id, derived
+// from the canonical report (ADA-108). Only transactions the engine classified
+// as expenses contribute; transfers (including credit-card payments), refunds,
+// and unclassified credits are excluded so a card payment can't masquerade as
+// spending. Expenses without a category are bucketed as "other".
 func queryCategoryBreakdown(database *db.DB, startISO, endISO string, accountFilter []string) []CategoryItem {
-	q := `
-		SELECT
-			COALESCE(c.category_id, 'other') AS cat_id,
-			COALESCE(SUM(ABS(t.amount_cents)), 0) AS total
-		FROM transactions t
-		LEFT JOIN category_overrides c
-			ON TRIM(LOWER(COALESCE(NULLIF(t.merchant,''), NULLIF(t.description,''), ''))) = c.merchant_norm
-		WHERE t.posted_at >= ? AND t.posted_at < ?
-		  AND t.amount_cents < 0
-	`
-	args := []any{startISO, endISO}
-	q, args = appendAccountFilter(q, args, accountFilter)
-	q += " GROUP BY cat_id ORDER BY total DESC LIMIT 20"
-
-	rows, err := database.Query(q, args...)
-	if err != nil {
+	report := reportForRange(database, startISO, endISO, accountFilter)
+	if report == nil {
 		return nil
 	}
-	defer rows.Close()
 
-	var items []CategoryItem
-	for rows.Next() {
-		var catID string
-		var total int64
-		if err := rows.Scan(&catID, &total); err != nil {
+	totals := make(map[string]*CategoryItem)
+	var order []string
+	for i := range report.Transactions {
+		txn := &report.Transactions[i]
+		if txn.TxnType != classify.TxnExpense {
 			continue
 		}
-		items = append(items, CategoryItem{
-			CategoryID:   catID,
-			CategoryName: titleCase(catID),
-			NetCents:     total,
-		})
+		amt := txn.AmountCents
+		if amt < 0 {
+			amt = -amt
+		}
+		catID := txn.CategoryID
+		if catID == "" {
+			catID = "other"
+		}
+		item := totals[catID]
+		if item == nil {
+			item = &CategoryItem{CategoryID: catID, CategoryName: titleCase(catID)}
+			totals[catID] = item
+			order = append(order, catID)
+		}
+		item.NetCents += amt
+		item.Count++
 	}
-	if err := rows.Err(); err != nil {
-		log.Printf("rows iteration error: %v", err)
+
+	items := make([]CategoryItem, 0, len(order))
+	for _, id := range order {
+		items = append(items, *totals[id])
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].NetCents > items[j].NetCents
+	})
+	if len(items) > 20 {
+		items = items[:20]
 	}
 	return items
 }

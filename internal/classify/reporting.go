@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/arclighteng/fin-go/internal/categorize"
+	"github.com/arclighteng/fin-go/internal/reconciliation"
 )
 
 // ClassifierVersion and ReportVersion are bumped whenever classification logic
@@ -225,12 +226,31 @@ func ReportPeriod(db *sql.DB, startDate, endDate time.Time, includePending bool,
 		integrityFlags = append(integrityFlags, FlagPendingInTotals)
 	}
 
+	// Duplicate suspicion (ADA-111): distinct fingerprints that share the same
+	// (account, posted date, amount, merchant) are almost always double-imports.
+	// Same-fingerprint rows are already deduped upstream, so any collision here
+	// is a genuine review candidate.
+	dupCount := detectDuplicateSuspects(transactions)
+	if dupCount > 0 {
+		integrityFlags = append(integrityFlags, FlagDuplicateSuspected)
+	}
+
+	// Reconciliation (ADA-111): unresolved statement discrepancies for the
+	// in-scope accounts mean the period's balances cannot be trusted, so the
+	// report must say so rather than presenting clean-looking totals.
+	reconDelta := reconciliationDelta(db, accountFilter)
+	if reconDelta != 0 {
+		integrityFlags = append(integrityFlags, FlagReconciliationFailed)
+	}
+
 	unmatchedCount := len(xferResult.UnmatchedOutflows) + len(xferResult.UnmatchedInflows)
 	integrity := IntegrityReport{
-		Flags:                   integrityFlags,
-		UnmatchedTransferCount:  unmatchedCount,
-		UnclassifiedCreditCount: unclassifiedCreditCount,
-		UnclassifiedCreditCents: unclassifiedCreditCents,
+		Flags:                    integrityFlags,
+		UnmatchedTransferCount:   unmatchedCount,
+		UnclassifiedCreditCount:  unclassifiedCreditCount,
+		UnclassifiedCreditCents:  unclassifiedCreditCents,
+		DuplicateSuspectCount:    dupCount,
+		ReconciliationDeltaCents: reconDelta,
 	}
 
 	label := fmt.Sprintf("%s to %s", startDate.Format("2006-01-02"), endDate.Format("2006-01-02"))
@@ -325,6 +345,73 @@ func formatPeriodLabel(periodType string, start time.Time) string {
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+// detectDuplicateSuspects counts how many transactions are exact economic
+// duplicates of an earlier one in the same period: identical account, posted
+// date, signed amount, and normalised merchant. The first occurrence of each
+// identity is not counted; every additional copy is. Rows with an empty
+// merchant are skipped to avoid flagging sparse data as duplicates.
+func detectDuplicateSuspects(txns []ClassifiedTransaction) int {
+	type dupKey struct {
+		account  string
+		date     string
+		merchant string
+		amount   int64
+	}
+	seen := make(map[dupKey]int, len(txns))
+	extras := 0
+	for i := range txns {
+		t := &txns[i]
+		if t.MerchantNorm == "" {
+			continue
+		}
+		k := dupKey{
+			account:  t.AccountID,
+			date:     t.PostedAt.Format("2006-01-02"),
+			merchant: t.MerchantNorm,
+			amount:   t.AmountCents,
+		}
+		seen[k]++
+		if seen[k] > 1 {
+			extras++
+		}
+	}
+	return extras
+}
+
+// reconciliationDelta returns the total absolute unresolved statement
+// discrepancy (in cents) for the accounts in scope. accountFilter follows the
+// same allow-list semantics as ReportPeriod: nil means all accounts. A return
+// value of 0 means every in-scope account reconciles (or none has ever been
+// reconciled), and no FlagReconciliationFailed is raised.
+func reconciliationDelta(db *sql.DB, accountFilter []string) int64 {
+	events, err := reconciliation.ListPendingDiscrepancies(db)
+	if err != nil || len(events) == 0 {
+		return 0
+	}
+
+	var acctSet map[string]bool
+	if accountFilter != nil {
+		acctSet = make(map[string]bool, len(accountFilter))
+		for _, id := range accountFilter {
+			acctSet[id] = true
+		}
+	}
+
+	var total int64
+	for i := range events {
+		e := &events[i]
+		if acctSet != nil && !acctSet[e.AccountID] {
+			continue
+		}
+		d := e.DeltaCents
+		if d < 0 {
+			d = -d
+		}
+		total += d
+	}
+	return total
+}
 
 func loadCategoryOverrides(db *sql.DB) map[string]string {
 	rows, err := db.Query("SELECT merchant_norm, category_id FROM category_overrides")
