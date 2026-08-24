@@ -6,7 +6,6 @@ import (
 	"log"
 
 	"github.com/arclighteng/fin-go/internal/config"
-	"github.com/arclighteng/fin-go/internal/credentials"
 	"github.com/arclighteng/fin-go/internal/db"
 	"github.com/arclighteng/fin-go/internal/server"
 	"github.com/arclighteng/fin-go/internal/simplefin"
@@ -39,10 +38,10 @@ var syncCmd = &cobra.Command{
 			return fmt.Errorf("rate limit reached: %d syncs in the last 24 hours (max %d)", count, server.MaxSyncsPerDay)
 		}
 
-		// Get access URL
-		accessURL, err := credentials.GetSimpleFinURL()
-		if err != nil || accessURL == "" {
-			return fmt.Errorf("no SimpleFIN access URL configured. Run: fin setup <access-url>")
+		// Get access URL (keyring first, then SIMPLEFIN_ACCESS_URL env -- resolved by config.Load)
+		accessURL := cfg.SimpleFinAccessURL
+		if accessURL == "" {
+			return fmt.Errorf("no SimpleFIN access URL configured. Run: fin setup <access-url>, or set SIMPLEFIN_ACCESS_URL")
 		}
 
 		client, err := simplefin.NewClient(accessURL)

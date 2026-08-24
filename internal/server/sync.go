@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/arclighteng/fin-go/internal/credentials"
 	"github.com/arclighteng/fin-go/internal/simplefin"
 )
 
@@ -36,11 +35,11 @@ func (s *Server) handleAPISync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get access URL
-	accessURL, err := credentials.GetSimpleFinURL()
-	if err != nil || accessURL == "" {
+	// Get access URL (keyring first, then SIMPLEFIN_ACCESS_URL env -- resolved at config load)
+	accessURL := s.cfg.SimpleFinAccessURL
+	if accessURL == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "No SimpleFIN access URL configured. Run: fin setup <access-url>",
+			"error": "No SimpleFIN access URL configured. Run: fin setup <access-url>, or set SIMPLEFIN_ACCESS_URL",
 		})
 		return
 	}
