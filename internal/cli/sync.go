@@ -66,6 +66,13 @@ var syncCmd = &cobra.Command{
 			return fmt.Errorf("upsert transactions: %w", err)
 		}
 
+		// Detect and persist recurring subscriptions/bills into commitments.
+		// Non-fatal: a detection failure must not fail an otherwise-successful sync.
+		detect, derr := server.DetectAndPersistCommitments(database)
+		if derr != nil {
+			log.Printf("warning: subscription detection failed: %v", derr)
+		}
+
 		// Record run
 		if err := database.RecordRun(syncLookback, len(result.Transactions), inserted, updated); err != nil {
 			log.Printf("warning: failed to record run: %v", err)
@@ -73,6 +80,7 @@ var syncCmd = &cobra.Command{
 
 		fmt.Printf("Sync complete: %d accounts, %d transactions fetched\n", len(result.Accounts), len(result.Transactions))
 		fmt.Printf("  Inserted: %d, Updated: %d\n", inserted, updated)
+		fmt.Printf("  Subscriptions: %d found, %d added, %d updated\n", detect.Detected, detect.Inserted, detect.Updated)
 		fmt.Printf("  Rate limit: %d/%d syncs today\n", count+1, server.MaxSyncsPerDay)
 
 		return nil
