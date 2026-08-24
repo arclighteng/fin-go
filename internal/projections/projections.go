@@ -13,6 +13,8 @@ package projections
 import (
 	"database/sql"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -80,8 +82,15 @@ func ProjectCashFlow(db *sql.DB, opts ProjectOptions) (*Projection, error) {
 	sortChargesByDate(upcoming)
 
 	expectedFixed := int64(0)
+	// excludeMerchants collects the normalized merchant of every charge already
+	// represented by a fixed commitment or detected subscription, so that
+	// estimateFlexibleSpending does not double-count those transactions.
+	excludeMerchants := make(map[string]struct{})
 	for _, c := range upcoming {
 		expectedFixed += c.ExpectedCents
+		if norm := normalizeMerchant(c.Merchant); norm != "" {
+			excludeMerchants[norm] = struct{}{}
+		}
 	}
 
 	expectedIncome, err := estimateIncome(db, opts.DaysForward, opts.AccountFilter)
@@ -89,7 +98,7 @@ func ProjectCashFlow(db *sql.DB, opts ProjectOptions) (*Projection, error) {
 		return nil, err
 	}
 
-	expectedVariable, expectedDiscretionary, err := estimateFlexibleSpending(db, opts.DaysForward, opts.AccountFilter)
+	expectedVariable, expectedDiscretionary, err := estimateFlexibleSpending(db, opts.DaysForward, opts.AccountFilter, excludeMerchants)
 	if err != nil {
 		return nil, err
 	}
@@ -382,17 +391,23 @@ func estimateIncome(db *sql.DB, daysForward int, accountFilter []string) (int64,
 	endMonth := startOfMonth(time.Now().UTC())
 
 	var totalIncome int64
+	// Use EXISTS rather than an INNER JOIN so a deposit matching multiple income
+	// rules is counted once (no fan-out). Guard against blank merchant_pattern,
+	// which would otherwise become LIKE '%%' and match every positive txn.
 	rows, err := db.Query(`
 		SELECT COALESCE(SUM(t.amount_cents), 0),
 		       JULIANDAY(?) - JULIANDAY(?) AS total_days
 		FROM transactions t
-		INNER JOIN merchant_rules mr
-		       ON TRIM(LOWER(COALESCE(NULLIF(t.merchant,''), NULLIF(t.description,''), '')))
-		          LIKE '%' || mr.merchant_pattern || '%'
-		       AND mr.rule_type = 'income'
 		WHERE t.posted_at >= ? AND t.posted_at < ?
 		  AND t.amount_cents > 0
-		  AND COALESCE(t.pending, 0) = 0`,
+		  AND COALESCE(t.pending, 0) = 0
+		  AND EXISTS (
+		      SELECT 1 FROM merchant_rules mr
+		      WHERE mr.rule_type = 'income'
+		        AND TRIM(COALESCE(mr.merchant_pattern, '')) <> ''
+		        AND TRIM(LOWER(COALESCE(NULLIF(t.merchant,''), NULLIF(t.description,''), '')))
+		            LIKE '%' || mr.merchant_pattern || '%'
+		  )`,
 		endMonth.Format("2006-01-02"), cutoff.Format("2006-01-02"),
 		cutoff.Format("2006-01-02"), endMonth.Format("2006-01-02"),
 	)
@@ -413,15 +428,20 @@ func estimateIncome(db *sql.DB, daysForward int, accountFilter []string) (int64,
 	return 0, nil
 }
 
-func estimateFlexibleSpending(db *sql.DB, daysForward int, accountFilter []string) (variable, discretionary int64, err error) {
+func estimateFlexibleSpending(db *sql.DB, daysForward int, accountFilter []string, excludeMerchants map[string]struct{}) (variable, discretionary int64, err error) {
 	// Rolling 3-month average for negative-amount transactions, split by
 	// a simple heuristic: merchants seen ≥4 times/month → variable,
 	// otherwise → discretionary. This is a best-effort estimate.
+	//
+	// Transactions whose normalized merchant is already represented by a fixed
+	// commitment or detected subscription (excludeMerchants) are skipped so
+	// those fixed charges are not double-counted against expectedFixed.
 	cutoff := startOfMonth(time.Now().UTC()).AddDate(0, -3, 0)
 	endMonth := startOfMonth(time.Now().UTC())
 
 	query := `
-		SELECT ABS(amount_cents)
+		SELECT ABS(amount_cents),
+		       TRIM(LOWER(COALESCE(NULLIF(merchant,''), NULLIF(description,''), ''))) AS merchant_norm
 		FROM transactions
 		WHERE posted_at >= ? AND posted_at < ?
 		  AND amount_cents < 0
@@ -446,7 +466,11 @@ func estimateFlexibleSpending(db *sql.DB, daysForward int, accountFilter []strin
 	var count int
 	for rows.Next() {
 		var amt int64
-		if scanErr := rows.Scan(&amt); scanErr != nil {
+		var merchantNorm string
+		if scanErr := rows.Scan(&amt, &merchantNorm); scanErr != nil {
+			continue
+		}
+		if _, skip := excludeMerchants[normalizeMerchant(merchantNorm)]; skip {
 			continue
 		}
 		total += amt
@@ -488,6 +512,11 @@ func computeNextDueDate(cadence string, dayOfMonth *int, referenceDate *time.Tim
 			anchor = lastDay
 		}
 		anchorDate := time.Date(y, m, anchor, 0, 0, 0, 0, time.UTC)
+		// If this month's occurrence is still on or after today, it is the next
+		// due date; otherwise roll forward to a later month.
+		if !anchorDate.Before(today) {
+			return &anchorDate
+		}
 		next := nextMonthlyDate(anchorDate, today)
 		return &next
 
@@ -636,13 +665,15 @@ func queryConfirmedCommitments(db *sql.DB, direction string) ([]commitment, erro
 }
 
 func medianCommitmentAmount(db *sql.DB, merchantNorm string, _ *int, _ string) (int64, bool, error) {
+	// Sample the most recent charges, then compute a true numeric median.
+	// A wider sample than 3 gives a more stable estimate against outliers.
 	rows, err := db.Query(`
 		SELECT ABS(amount_cents) FROM transactions
 		WHERE TRIM(LOWER(COALESCE(NULLIF(merchant,''), NULLIF(description,''), ''))) = ?
 		  AND amount_cents < 0
 		  AND COALESCE(pending, 0) = 0
 		ORDER BY posted_at DESC
-		LIMIT 3`,
+		LIMIT 12`,
 		lower(merchantNorm),
 	)
 	if err != nil {
@@ -661,9 +692,18 @@ func medianCommitmentAmount(db *sql.DB, merchantNorm string, _ *int, _ string) (
 	if len(amounts) == 0 {
 		return 0, false, rows.Err()
 	}
-	// Return median.
-	mid := amounts[len(amounts)/2]
-	return mid, true, rows.Err()
+
+	// Numeric median: sort by amount, take the middle (or mean of the two
+	// middle values for an even-sized sample).
+	sort.Slice(amounts, func(i, j int) bool { return amounts[i] < amounts[j] })
+	n := len(amounts)
+	var median int64
+	if n%2 == 1 {
+		median = amounts[n/2]
+	} else {
+		median = (amounts[n/2-1] + amounts[n/2]) / 2
+	}
+	return median, true, rows.Err()
 }
 
 type subscriptionCandidate struct {
@@ -740,6 +780,13 @@ func startOfMonth(t time.Time) time.Time {
 func daysInMonth(year int, month time.Month) int {
 	// First day of next month minus one day.
 	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
+}
+
+// normalizeMerchant trims surrounding whitespace and lowercases a merchant
+// label so commitment/subscription identifiers compare equal to the
+// TRIM(LOWER(...)) merchant_norm computed in transaction queries.
+func normalizeMerchant(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 func lower(s string) string {

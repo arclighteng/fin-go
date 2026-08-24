@@ -219,7 +219,16 @@ func SpendingPlan(db *sql.DB, opts PlanOptions) (*Plan, error) {
 					max = a
 				}
 			}
-			avg = sum / int64(len(nonZero))
+			// Denominator convention: monthly averages divide the window total by
+			// the WINDOW LENGTH in months (opts.Months), not the count of active
+			// months. This amortizes infrequent/annual charges across the window
+			// (e.g. a single $1,200 charge in a 6-month window → $200/mo, not
+			// $1,200/mo) and keeps spend and income on the same denominator.
+			avg = sum / int64(opts.Months)
+			// activeAvg is the mean over months that actually had activity; used
+			// only for the predictability (coefficient-of-variation) estimate so
+			// amortization does not distort its spread measure.
+			activeAvg := sum / int64(len(nonZero))
 
 			// Trend: compare recent 2 months vs older months.
 			if len(nonZero) >= 3 {
@@ -244,7 +253,7 @@ func SpendingPlan(db *sql.DB, opts PlanOptions) (*Plan, error) {
 
 			// Predictability via coefficient of variation.
 			if len(nonZero) > 1 {
-				mean := float64(avg)
+				mean := float64(activeAvg)
 				var variance float64
 				for _, a := range nonZero {
 					d := float64(a) - mean
@@ -278,16 +287,16 @@ func SpendingPlan(db *sql.DB, opts PlanOptions) (*Plan, error) {
 		})
 	}
 
-	// Income: average across months that have data.
+	// Income: average over the WINDOW LENGTH in months, matching the spend
+	// denominator convention above (total income in the window / opts.Months),
+	// rather than dividing by the count of months that happened to have income.
 	var totalIncome int64
-	monthsWithIncome := 0
 	for _, v := range incomeByMonth {
 		totalIncome += v
-		monthsWithIncome++
 	}
 	var monthlyIncome int64
-	if monthsWithIncome > 0 {
-		monthlyIncome = totalIncome / int64(monthsWithIncome)
+	if opts.Months > 0 {
+		monthlyIncome = totalIncome / int64(opts.Months)
 	}
 
 	netMonthly := monthlyIncome - totalMonthlySpend

@@ -616,6 +616,227 @@ func TestProjectCashFlow_AccountFilter_ExcludesOtherAccounts(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Bug 1: fixed commitments must not be double-counted in flexible spending
+// ---------------------------------------------------------------------------
+
+func TestEstimateFlexibleSpendingExcludesFixedCommitments(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	createProjectionSchema(t, db)
+
+	som := startOfMonth(time.Now().UTC())
+	// Dates in each of the previous three full months (the estimate window).
+	dates := []string{
+		som.AddDate(0, -1, 14).Format("2006-01-02"),
+		som.AddDate(0, -2, 14).Format("2006-01-02"),
+		som.AddDate(0, -3, 14).Format("2006-01-02"),
+	}
+
+	// "rent" is a fixed commitment (also present as transactions); "coffee" is
+	// genuinely flexible spending.
+	for i, d := range dates {
+		if _, err := db.Exec(
+			`INSERT INTO transactions(fingerprint, account_id, posted_at, amount_cents, merchant, pending)
+			 VALUES (?, 'acct-1', ?, -100000, 'rent', 0), (?, 'acct-1', ?, -3000, 'coffee', 0)`,
+			"rent-"+itoa(i), d, "coffee-"+itoa(i), d,
+		); err != nil {
+			t.Fatalf("seed transactions: %v", err)
+		}
+	}
+
+	// Without dedup: rent gets counted in flexible spending too.
+	varNo, discNo, err := estimateFlexibleSpending(db, 30, nil, nil)
+	if err != nil {
+		t.Fatalf("estimateFlexibleSpending (no exclude): %v", err)
+	}
+	noTotal := varNo + discNo
+
+	// With rent excluded (as a fixed commitment would be), only coffee remains.
+	exclude := map[string]struct{}{"rent": {}}
+	varYes, discYes, err := estimateFlexibleSpending(db, 30, nil, exclude)
+	if err != nil {
+		t.Fatalf("estimateFlexibleSpending (exclude rent): %v", err)
+	}
+	yesTotal := varYes + discYes
+
+	// 3 months, 30-day forward window: monthly avg == total/3, scaled *30/30.
+	// No-exclude: (3*100000 + 3*3000)/3 = 103000. Exclude rent: 3*3000/3 = 3000.
+	if noTotal != 103000 {
+		t.Errorf("baseline flexible spend: want 103000 (proves double-count), got %d", noTotal)
+	}
+	if yesTotal != 3000 {
+		t.Errorf("deduped flexible spend: want 3000 (coffee only), got %d", yesTotal)
+	}
+	if yesTotal >= noTotal {
+		t.Errorf("excluding fixed commitment should lower flexible spend: %d vs %d", yesTotal, noTotal)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Bug 2: income fallback dedupes multi-rule matches and guards empty patterns
+// ---------------------------------------------------------------------------
+
+func TestEstimateIncomeFallbackDedupesAndGuardsEmptyPattern(t *testing.T) {
+	t.Parallel()
+
+	// estimate builds a fresh DB with the given income rules and a single
+	// positive transaction, then runs the fallback income estimator.
+	estimate := func(t *testing.T, patterns []string, merchant string, amt int64) int64 {
+		t.Helper()
+		db := newTestDB(t)
+		createProjectionSchema(t, db)
+		for i, p := range patterns {
+			if _, err := db.Exec(
+				`INSERT INTO merchant_rules(id, merchant_pattern, rule_type) VALUES (?, ?, 'income')`,
+				i+1, p,
+			); err != nil {
+				t.Fatalf("insert rule: %v", err)
+			}
+		}
+		d := startOfMonth(time.Now().UTC()).AddDate(0, -1, 14).Format("2006-01-02")
+		if _, err := db.Exec(
+			`INSERT INTO transactions(fingerprint, account_id, posted_at, amount_cents, merchant, pending)
+			 VALUES ('inc-1', 'acct-1', ?, ?, ?, 0)`,
+			d, amt, merchant,
+		); err != nil {
+			t.Fatalf("insert txn: %v", err)
+		}
+		got, err := estimateIncome(db, 30, nil)
+		if err != nil {
+			t.Fatalf("estimateIncome: %v", err)
+		}
+		return got
+	}
+
+	// One matching rule.
+	one := estimate(t, []string{"payroll"}, "payroll deposit", 300000)
+	if one <= 0 {
+		t.Fatalf("single-rule income estimate should be > 0, got %d", one)
+	}
+
+	// Two rules that BOTH match the same deposit must not double-count it.
+	two := estimate(t, []string{"payroll", "deposit"}, "payroll deposit", 300000)
+	if two != one {
+		t.Errorf("multi-rule match double-counts: want %d (deduped), got %d", one, two)
+	}
+
+	// An empty/blank pattern must not match every positive transaction.
+	empty := estimate(t, []string{""}, "random unrelated deposit", 300000)
+	if empty != 0 {
+		t.Errorf("empty income pattern should match nothing, got %d", empty)
+	}
+	blank := estimate(t, []string{"   "}, "random unrelated deposit", 300000)
+	if blank != 0 {
+		t.Errorf("blank income pattern should match nothing, got %d", blank)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Bug 3: a monthly commitment due later this month is returned, not skipped
+// ---------------------------------------------------------------------------
+
+func TestComputeNextDueDateMonthlyCurrentMonth(t *testing.T) {
+	t.Parallel()
+
+	// Today is the 10th; the bill is due the 25th → next due date is the 25th
+	// of THIS month, not next month.
+	today := time.Date(2025, 3, 10, 0, 0, 0, 0, time.UTC)
+	day := 25
+	next := computeNextDueDate("monthly", &day, nil, today)
+	if next == nil {
+		t.Fatal("computeNextDueDate monthly: want non-nil")
+	}
+	want := time.Date(2025, 3, 25, 0, 0, 0, 0, time.UTC)
+	if !next.Equal(want) {
+		t.Errorf("current-month bill: want %v, got %v", want, *next)
+	}
+
+	// Today is the 25th, bill due the 10th (already passed) → next month.
+	today2 := time.Date(2025, 3, 25, 0, 0, 0, 0, time.UTC)
+	day2 := 10
+	next2 := computeNextDueDate("monthly", &day2, nil, today2)
+	if next2 == nil {
+		t.Fatal("computeNextDueDate monthly (past day): want non-nil")
+	}
+	want2 := time.Date(2025, 4, 10, 0, 0, 0, 0, time.UTC)
+	if !next2.Equal(want2) {
+		t.Errorf("passed-this-month bill: want %v, got %v", want2, *next2)
+	}
+
+	// Bill due exactly today → today (inclusive).
+	today3 := time.Date(2025, 3, 15, 0, 0, 0, 0, time.UTC)
+	day3 := 15
+	next3 := computeNextDueDate("monthly", &day3, nil, today3)
+	if next3 == nil || !next3.Equal(today3) {
+		t.Errorf("bill due today: want %v, got %v", today3, next3)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Bug 4: medianCommitmentAmount returns a numeric median, not date-middle
+// ---------------------------------------------------------------------------
+
+func TestMedianCommitmentAmountNumericMedian(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	createProjectionSchema(t, db)
+
+	// Insert three charges for one merchant. Ordered by posted_at DESC the
+	// amounts are 100, 500, 300 — so the date-middle element is 500, but the
+	// true numeric median of {100, 300, 500} is 300.
+	if _, err := db.Exec(`
+		INSERT INTO transactions(fingerprint, account_id, posted_at, amount_cents, merchant, pending) VALUES
+		  ('m1', 'acct-1', '2025-03-03', -100, 'netflix', 0),
+		  ('m2', 'acct-1', '2025-03-02', -500, 'netflix', 0),
+		  ('m3', 'acct-1', '2025-03-01', -300, 'netflix', 0)`,
+	); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, ok, err := medianCommitmentAmount(db, "netflix", nil, "monthly")
+	if err != nil {
+		t.Fatalf("medianCommitmentAmount: %v", err)
+	}
+	if !ok {
+		t.Fatal("want ok=true")
+	}
+	if got != 300 {
+		t.Errorf("numeric median: want 300, got %d (date-middle would be 500)", got)
+	}
+
+	// Even-sized sample: median is the mean of the two middle values.
+	if _, err := db.Exec(`
+		INSERT INTO transactions(fingerprint, account_id, posted_at, amount_cents, merchant, pending) VALUES
+		  ('e1', 'acct-1', '2025-04-04', -100, 'spotify', 0),
+		  ('e2', 'acct-1', '2025-04-03', -200, 'spotify', 0),
+		  ('e3', 'acct-1', '2025-04-02', -300, 'spotify', 0),
+		  ('e4', 'acct-1', '2025-04-01', -400, 'spotify', 0)`,
+	); err != nil {
+		t.Fatalf("seed even: %v", err)
+	}
+	gotEven, ok, err := medianCommitmentAmount(db, "spotify", nil, "monthly")
+	if err != nil || !ok {
+		t.Fatalf("medianCommitmentAmount even: ok=%v err=%v", ok, err)
+	}
+	if gotEven != 250 { // (200+300)/2
+		t.Errorf("even median: want 250, got %d", gotEven)
+	}
+}
+
+// itoa is a tiny helper to avoid importing strconv in tests.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b []byte
+	for n > 0 {
+		b = append([]byte{byte('0' + n%10)}, b...)
+		n /= 10
+	}
+	return string(b)
+}
+
+// ---------------------------------------------------------------------------
 // buildPlaceholders helper
 // ---------------------------------------------------------------------------
 
