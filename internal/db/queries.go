@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 
@@ -434,6 +435,74 @@ func (d *DB) SaveCommitment(c models.Commitment) (int64, error) {
 		return 0, err
 	}
 	return res.LastInsertId()
+}
+
+// UpsertDetectedCommitment inserts or refreshes an auto-detected commitment,
+// keyed on (merchant_norm, direction). Provenance is recorded in the existing
+// `source` column: auto-detected rows use source='detected' (vs 'manual' for
+// user-entered and 'dismissed' for user-hidden), so no schema change is needed.
+//
+// It NEVER modifies a commitment the user owns: rows that are confirmed, or
+// whose source is 'manual' or 'dismissed', are left untouched and reported as
+// "skipped". An existing unconfirmed 'detected' row for the same merchant is
+// refreshed in place, so re-running sync updates the amount/cadence estimate
+// without ever creating a duplicate. The returned action is one of "inserted",
+// "updated", or "skipped".
+func (d *DB) UpsertDetectedCommitment(c models.Commitment) (string, error) {
+	merchant := strings.ToLower(strings.TrimSpace(c.MerchantNorm))
+	if merchant == "" {
+		return "", fmt.Errorf("detected commitment requires a merchant_norm")
+	}
+	direction := c.Direction
+	if direction == "" {
+		direction = "expense"
+	}
+
+	var (
+		id        int64
+		source    string
+		confirmed int
+	)
+	err := d.db.QueryRow(`
+		SELECT id, source, confirmed FROM commitments
+		WHERE merchant_norm = ? AND direction = ?
+		ORDER BY id LIMIT 1`, merchant, direction).Scan(&id, &source, &confirmed)
+
+	now := utcNowISO()
+	switch {
+	case err == sql.ErrNoRows:
+		if _, ierr := d.db.Exec(`
+			INSERT INTO commitments(name, merchant_norm, expected_cents, cadence, day_of_month,
+			                        reference_date, confirmed, source, direction, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, 0, 'detected', ?, ?, ?)`,
+			c.Name, merchant, c.ExpectedCents, c.Cadence, c.DayOfMonth,
+			c.ReferenceDate, direction, now, now,
+		); ierr != nil {
+			return "", ierr
+		}
+		return "inserted", nil
+	case err != nil:
+		return "", err
+	}
+
+	// A commitment already exists for this merchant. Protect user-owned rows.
+	if confirmed == 1 || source == "manual" || source == "dismissed" {
+		return "skipped", nil
+	}
+
+	// Refresh the unconfirmed detected row in place (keeps the same id, so
+	// projections/UI references remain stable and no duplicate is created).
+	if _, uerr := d.db.Exec(`
+		UPDATE commitments
+		SET name = ?, expected_cents = ?, cadence = ?, day_of_month = ?,
+		    reference_date = ?, source = 'detected', updated_at = ?
+		WHERE id = ?`,
+		c.Name, c.ExpectedCents, c.Cadence, c.DayOfMonth,
+		c.ReferenceDate, now, id,
+	); uerr != nil {
+		return "", uerr
+	}
+	return "updated", nil
 }
 
 // UpdateCommitment applies partial updates to a commitment by ID.

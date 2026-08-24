@@ -92,14 +92,24 @@ func (s *Server) handleAPISync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Detect and persist recurring subscriptions/bills into commitments.
+	// Non-fatal: a detection failure must not fail an otherwise-successful sync.
+	detect, derr := DetectAndPersistCommitments(s.db)
+	if derr != nil {
+		log.Printf("warning: subscription detection failed: %v", derr)
+	}
+
 	// Record run
 	if err := s.db.RecordRun(lookbackDays, len(result.Transactions), inserted, updated); err != nil {
 		log.Printf("warning: failed to record run: %v", err)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"fetched":  len(result.Transactions),
-		"inserted": inserted,
-		"updated":  updated,
+		"fetched":               len(result.Transactions),
+		"inserted":              inserted,
+		"updated":               updated,
+		"subscriptions_found":   detect.Detected,
+		"subscriptions_added":   detect.Inserted,
+		"subscriptions_updated": detect.Updated,
 	})
 }
