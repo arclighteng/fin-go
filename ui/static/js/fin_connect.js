@@ -205,7 +205,7 @@ async function saveSimplefinToken() {
     var btn   = document.getElementById('simplefinSaveBtn');
     var msgEl = document.getElementById('simplefinStatusMsg');
     if (!token) {
-        msgEl.textContent = 'Please paste your SimpleFIN setup token.';
+        msgEl.textContent = 'Please paste your SimpleFIN access URL.';
         msgEl.className = 'import-status-msg error';
         msgEl.style.display = 'block';
         return;
@@ -222,20 +222,20 @@ async function saveSimplefinToken() {
         var data = await resp.json();
         if (!resp.ok) {
             btn.disabled = false;
-            btn.textContent = 'Save Token';
-            msgEl.textContent = data.error || 'Failed to save token.';
+            btn.textContent = 'Save access URL';
+            msgEl.textContent = data.error || 'Failed to save access URL.';
             msgEl.className = 'import-status-msg error';
             msgEl.style.display = 'block';
             return;
         }
         btn.textContent = 'Saved!';
-        msgEl.textContent = 'Token saved. Use the Sync button on the dashboard to import your transactions.';
+        msgEl.textContent = 'Access URL saved. Use the Sync button on the dashboard to import your transactions.';
         msgEl.className = 'import-status-msg success';
         msgEl.style.display = 'block';
     } catch (err) {
         btn.disabled = false;
-        btn.textContent = 'Save Token';
-        msgEl.textContent = 'Network error — could not save token.';
+        btn.textContent = 'Save access URL';
+        msgEl.textContent = 'Network error — could not save access URL.';
         msgEl.className = 'import-status-msg error';
         msgEl.style.display = 'block';
     }
