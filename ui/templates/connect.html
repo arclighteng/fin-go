@@ -225,22 +225,22 @@
                 <div class="simplefin-step">
                     <div class="simplefin-step-number">1</div>
                     <div class="simplefin-step-content">
-                        <strong>Create a SimpleFIN token</strong>
-                        <span>Visit SimpleFIN Bridge and connect your bank accounts there. You&#39;ll receive a token.</span>
+                        <strong>Connect your bank at SimpleFIN Bridge</strong>
+                        <span>Visit SimpleFIN Bridge and connect your bank accounts there. You&#39;ll receive a one-time setup token.</span>
                     </div>
                 </div>
                 <div class="simplefin-step">
                     <div class="simplefin-step-number">2</div>
                     <div class="simplefin-step-content">
-                        <strong>Copy your setup token</strong>
-                        <span>After connecting, SimpleFIN gives you a one-time setup token &mdash; copy it to your clipboard.</span>
+                        <strong>Claim your access URL</strong>
+                        <span>Exchange (claim) that setup token for your access URL &mdash; it starts with <code>https://</code> and ends in <code>.simplefin.org</code>. This app expects the access URL, not the raw setup token.</span>
                     </div>
                 </div>
                 <div class="simplefin-step">
                     <div class="simplefin-step-number">3</div>
                     <div class="simplefin-step-content">
                         <strong>Paste it below &amp; sync</strong>
-                        <span>Paste the token here, then use the Sync button on the dashboard to pull your transactions.</span>
+                        <span>Paste the access URL here, then use the Sync button on the dashboard to pull your transactions.</span>
                     </div>
                 </div>
             </div>
@@ -250,7 +250,7 @@
             </a>
 
             <div class="simplefin-token-area" id="simplefinTokenArea">
-                <label for="simplefinTokenInput">Paste your SimpleFIN setup token</label>
+                <label for="simplefinTokenInput">Paste your SimpleFIN access URL</label>
                 <textarea
                     class="simplefin-token-input"
                     id="simplefinTokenInput"
@@ -258,7 +258,7 @@
                     rows="3"
                 ></textarea>
                 <div style="margin-top:10px; display:flex; gap:8px;">
-                    <button class="btn btn-primary" onclick="saveSimplefinToken()" id="simplefinSaveBtn">Save Token</button>
+                    <button class="btn btn-primary" onclick="saveSimplefinToken()" id="simplefinSaveBtn">Save access URL</button>
                 </div>
                 <div class="import-status-msg" id="simplefinStatusMsg" style="display:none;"></div>
             </div>
