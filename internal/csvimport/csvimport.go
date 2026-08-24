@@ -25,6 +25,8 @@ type bankFormat struct {
 	amountCol   string
 	descCol     string
 	merchantCol string // optional — empty means no separate merchant column
+	creditCol   string // optional — set for banks that split money-out/money-in
+	// across two columns (amountCol = Debit/money-out, creditCol = Credit/money-in).
 }
 
 // knownFormats maps a bank slug to its column layout.
@@ -56,7 +58,8 @@ var knownFormats = map[string]bankFormat{
 	"capitalone": {
 		displayName: "Capital One",
 		dateCol:     "Transaction Date",
-		amountCol:   "Debit",
+		amountCol:   "Debit",  // money out (expense)
+		creditCol:   "Credit", // money in (payment/refund)
 		descCol:     "Description",
 	},
 }
@@ -117,7 +120,7 @@ func Import(r io.Reader, opts ImportOptions) (*Result, error) {
 	dataRows := records[1:]
 
 	// Resolve column indices from detected or default mapping.
-	dateIdx, amountIdx, descIdx, merchantIdx, err := resolveColumns(headers, opts)
+	dateIdx, amountIdx, creditIdx, descIdx, merchantIdx, err := resolveColumns(headers, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +145,7 @@ func Import(r io.Reader, opts ImportOptions) (*Result, error) {
 	for rowNum, row := range dataRows {
 		lineNum := rowNum + 2 // +1 for header, +1 for 1-based display
 
-		txn, errMsg := parseRow(row, lineNum, headers, dateIdx, amountIdx, descIdx, merchantIdx, opts.AccountID, fallbackDateFormats)
+		txn, errMsg := parseRow(row, lineNum, headers, dateIdx, amountIdx, creditIdx, descIdx, merchantIdx, opts.AccountID, fallbackDateFormats)
 		if errMsg != "" {
 			result.Errors = append(result.Errors, errMsg)
 			continue
@@ -159,7 +162,7 @@ func parseRow(
 	row []string,
 	lineNum int,
 	headers []string,
-	dateIdx, amountIdx, descIdx, merchantIdx int,
+	dateIdx, amountIdx, creditIdx, descIdx, merchantIdx int,
 	accountID string,
 	dateFormats []string,
 ) (models.Transaction, string) {
@@ -184,10 +187,36 @@ func parseRow(
 	}
 
 	// --- Amount ---
-	amountStr := get(amountIdx)
-	amountCents, err := parseAmountCents(amountStr)
-	if err != nil {
-		return models.Transaction{}, fmt.Sprintf("row %d: %v", lineNum, err)
+	// Two modes:
+	//   1. Single signed column (Chase/BofA/Amex/WF "Amount"): value already
+	//      carries its sign — negative = expense, positive = income.
+	//   2. Split debit/credit pair (Capital One): amountIdx = Debit (money out),
+	//      creditIdx = Credit (money in). Combine as credit - debit so that a
+	//      purchase (Debit populated) becomes negative (expense) and a
+	//      payment/refund (Credit populated) becomes positive (income), matching
+	//      the app-wide convention: negative amount_cents = expense, positive =
+	//      income (see internal/server/views.go).
+	var amountCents int64
+	if creditIdx >= 0 {
+		debitCents, debitPresent, dErr := parseAmountCell(get(amountIdx))
+		if dErr != nil {
+			return models.Transaction{}, fmt.Sprintf("row %d: %v", lineNum, dErr)
+		}
+		creditCents, creditPresent, cErr := parseAmountCell(get(creditIdx))
+		if cErr != nil {
+			return models.Transaction{}, fmt.Sprintf("row %d: %v", lineNum, cErr)
+		}
+		// A split-column row is never legitimately blank in both columns.
+		if !debitPresent && !creditPresent {
+			return models.Transaction{}, fmt.Sprintf("row %d: both debit and credit columns are blank", lineNum)
+		}
+		amountCents = creditCents - debitCents
+	} else {
+		var err error
+		amountCents, err = parseAmountCents(get(amountIdx))
+		if err != nil {
+			return models.Transaction{}, fmt.Sprintf("row %d: %v", lineNum, err)
+		}
 	}
 
 	// --- Description / Merchant ---
@@ -256,12 +285,34 @@ func parseAmountCents(raw string) (int64, error) {
 	return int64(math.Ceil(cents - 0.5)), nil
 }
 
+// parseAmountCell parses one amount cell, distinguishing a legitimately blank
+// cell from a non-empty but unparseable one. Returns (cents, present, error):
+//   - empty/whitespace cell        -> (0, false, nil)
+//   - non-empty, parseable cell     -> (cents, true, nil)
+//   - non-empty, unparseable cell   -> (0, true, error)
+//
+// This lets split debit/credit imports fall back to the other column on a blank
+// cell while still surfacing a real parse error instead of silently yielding 0.
+func parseAmountCell(raw string) (int64, bool, error) {
+	if strings.TrimSpace(raw) == "" {
+		return 0, false, nil
+	}
+	cents, err := parseAmountCents(raw)
+	if err != nil {
+		return 0, true, err
+	}
+	return cents, true, nil
+}
+
 // resolveColumns maps logical roles (date, amount, description, merchant) to
 // zero-based column indices within headers. Detection order:
 //  1. Known bank format matched by required column presence.
 //  2. Generic case-insensitive keyword search as fallback.
-func resolveColumns(headers []string, opts ImportOptions) (dateIdx, amountIdx, descIdx, merchantIdx int, err error) {
-	dateIdx, amountIdx, descIdx, merchantIdx = -1, -1, -1, -1
+// When creditIdx >= 0, amountIdx and creditIdx form a debit/credit pair
+// (amountIdx = money out, creditIdx = money in); otherwise amountIdx is a single
+// signed column and creditIdx is -1.
+func resolveColumns(headers []string, opts ImportOptions) (dateIdx, amountIdx, creditIdx, descIdx, merchantIdx int, err error) {
+	dateIdx, amountIdx, creditIdx, descIdx, merchantIdx = -1, -1, -1, -1, -1
 
 	lower := make([]string, len(headers))
 	for i, h := range headers {
@@ -288,17 +339,33 @@ func resolveColumns(headers []string, opts ImportOptions) (dateIdx, amountIdx, d
 		if detectedFmt.merchantCol != "" {
 			merchantIdx = findCI(detectedFmt.merchantCol)
 		}
+		if detectedFmt.creditCol != "" {
+			creditIdx = findCI(detectedFmt.creditCol)
+		}
 	} else {
-		// Generic fallback: look for keywords in header names.
+		// Generic fallback: look for keywords in header names. Debit and credit
+		// are tracked separately so a split-column export (e.g. an unrecognised
+		// Capital One-style file) is combined as a signed pair rather than
+		// collapsing both onto a single amount column (which mis-signs debits
+		// and silently drops credits).
+		amountKwIdx, debitKwIdx, creditKwIdx := -1, -1, -1
 		for i, h := range lower {
 			switch {
 			case containsAny(h, "date", "posted", "transaction date"):
 				if dateIdx < 0 {
 					dateIdx = i
 				}
-			case containsAny(h, "amount", "debit", "credit"):
-				if amountIdx < 0 {
-					amountIdx = i
+			case h == "amount":
+				if amountKwIdx < 0 {
+					amountKwIdx = i
+				}
+			case h == "debit":
+				if debitKwIdx < 0 {
+					debitKwIdx = i
+				}
+			case h == "credit":
+				if creditKwIdx < 0 {
+					creditKwIdx = i
 				}
 			case containsAny(h, "description", "memo", "narrative", "detail"):
 				if descIdx < 0 {
@@ -310,22 +377,33 @@ func resolveColumns(headers []string, opts ImportOptions) (dateIdx, amountIdx, d
 				}
 			}
 		}
+		switch {
+		case debitKwIdx >= 0 && creditKwIdx >= 0:
+			// Split debit/credit pair.
+			amountIdx, creditIdx = debitKwIdx, creditKwIdx
+		case amountKwIdx >= 0:
+			amountIdx = amountKwIdx
+		case debitKwIdx >= 0:
+			amountIdx = debitKwIdx
+		case creditKwIdx >= 0:
+			amountIdx = creditKwIdx
+		}
 	}
 
 	if dateIdx < 0 {
-		return 0, 0, 0, 0, fmt.Errorf("cannot find date column in headers: %v", headers)
+		return 0, 0, 0, 0, 0, fmt.Errorf("cannot find date column in headers: %v", headers)
 	}
 	if amountIdx < 0 {
-		return 0, 0, 0, 0, fmt.Errorf("cannot find amount column in headers: %v", headers)
+		return 0, 0, 0, 0, 0, fmt.Errorf("cannot find amount column in headers: %v", headers)
 	}
 	if descIdx < 0 && merchantIdx < 0 {
-		return 0, 0, 0, 0, fmt.Errorf("cannot find description or merchant column in headers: %v", headers)
+		return 0, 0, 0, 0, 0, fmt.Errorf("cannot find description or merchant column in headers: %v", headers)
 	}
 	if descIdx < 0 {
 		descIdx = merchantIdx // use merchant as description when description is absent
 	}
 
-	return dateIdx, amountIdx, descIdx, merchantIdx, nil
+	return dateIdx, amountIdx, creditIdx, descIdx, merchantIdx, nil
 }
 
 // detectFormat returns the bankFormat whose required columns are all present in
@@ -341,6 +419,7 @@ func detectFormat(lowerHeaders []string) (bankFormat, bool) {
 			strings.ToLower(fmt.dateCol),
 			strings.ToLower(fmt.amountCol),
 			strings.ToLower(fmt.descCol),
+			strings.ToLower(fmt.creditCol),
 		}
 		matched := true
 		for _, col := range required {
