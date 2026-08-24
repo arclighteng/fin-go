@@ -350,6 +350,42 @@ func TestDaysUntilEndOfMonth(t *testing.T) {
 	}
 }
 
+// TestDaysUntilEndOfMonth_SpringForward guards ADA-110 bug #2: March in
+// America/Chicago contains a 23-hour DST day, so end.Sub(ref).Hours()/24
+// truncated to 30. Whole-calendar-day counting must return 31.
+func TestDaysUntilEndOfMonth_SpringForward(t *testing.T) {
+	t.Parallel()
+
+	chicago, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Skipf("America/Chicago tzdata unavailable: %v", err)
+	}
+
+	ref := time.Date(2026, 3, 1, 0, 0, 0, 0, chicago)
+	got := dates.DaysUntilEndOfMonth(ref)
+	if got != 31 {
+		t.Errorf("DaysUntilEndOfMonth(Mar 1 Chicago) = %d, want 31", got)
+	}
+}
+
+// TestDateRangeDays_SpringForward guards the same off-by-one in DateRangeDays
+// across a spring-forward month in America/Chicago.
+func TestDateRangeDays_SpringForward(t *testing.T) {
+	t.Parallel()
+
+	chicago, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Skipf("America/Chicago tzdata unavailable: %v", err)
+	}
+
+	start := time.Date(2026, 3, 1, 0, 0, 0, 0, chicago)
+	end := time.Date(2026, 4, 1, 0, 0, 0, 0, chicago)
+	got := dates.DateRangeDays(start, end)
+	if got != 31 {
+		t.Errorf("DateRangeDays(Mar 1..Apr 1 Chicago) = %d, want 31", got)
+	}
+}
+
 func TestToday_ReturnsDateWithoutTime(t *testing.T) {
 	t.Parallel()
 
